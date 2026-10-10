@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Instala las herramientas cliente del laboratorio en Ubuntu sobre WSL2:
-#   kubectl (API de Kubernetes), k3d (clúster k3s en Docker), Helm (charts) y gh (GitHub CLI).
+#   kubectl (API de Kubernetes), k3d (clúster k3s en Docker), Helm (charts), gh (GitHub CLI) y make.
 # Idempotente: se puede ejecutar varias veces. Ver docs/adr/0002-entorno-laboratorio.md
 #
 # Uso (desde Ubuntu):   sudo ./install-k8s-tools.sh
@@ -52,9 +52,9 @@ fetch_key() {
   rm -f "$tmp"
 }
 
-# 1. Dependencias para descargar por HTTPS y verificar claves
+# 1. Dependencias para descargar por HTTPS y verificar claves, y make (objetivos up/down del laboratorio)
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl gnupg >/dev/null
+apt-get install -y -qq ca-certificates curl gnupg make >/dev/null
 install -m 0755 -d "$KEYRINGS"
 
 # 2. Claves de firma de los tres repositorios apt
