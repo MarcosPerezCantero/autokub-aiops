@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Instala las herramientas cliente del laboratorio en Ubuntu sobre WSL2:
-#   kubectl (API de Kubernetes), k3d (clúster k3s en Docker), Helm (charts), gh (GitHub CLI) y make.
+#   kubectl (API de Kubernetes), k3d (clúster k3s en Docker), Helm (charts), k9s (interfaz de terminal),
+#   gh (GitHub CLI) y make.
 # Idempotente: se puede ejecutar varias veces. Ver docs/adr/0002-entorno-laboratorio.md
 #
 # Uso (desde Ubuntu):   sudo ./install-k8s-tools.sh
@@ -13,6 +14,9 @@ KUBE_MINOR="v1.35"
 K3D_VERSION="v5.9.0"   # su k3s por defecto es v1.35.x
 # SHA-256 de k3d-linux-amd64 (checksums.txt de la release, verificado al fijar la versión)
 K3D_SHA256="06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0"
+K9S_VERSION="v0.51.0"
+# SHA-256 de k9s_Linux_amd64.tar.gz (checksums.sha256 de la release)
+K9S_SHA256="c3752ad51a5a4015a113819c4eeb6e55a4d0e4b8e652494797532f6fc8161dd7"
 
 # --- Huellas publicadas de las claves de firma de cada repositorio --------------
 K8S_FPR="DE15B14486CD377B9E876E1A234654DA9A296436"     # pkgs.k8s.io
@@ -108,14 +112,30 @@ if [[ "$(k3d version 2>/dev/null | awk '/^k3d version/{print $3}')" != "$K3D_VER
   rm -f "$tmp"
 fi
 
-# 6. Autocompletado de bash (se regenera en cada ejecución)
+# 6. k9s: igual que k3d (binario de GitHub Releases, versión y checksum fijados)
+if [[ "$(k9s version -s 2>/dev/null | awk '/^Version/{print $2}')" != "$K9S_VERSION" ]]; then
+  tmpdir=$(mktemp -d)
+  curl -fsSL "https://github.com/derailed/k9s/releases/download/${K9S_VERSION}/k9s_Linux_amd64.tar.gz" -o "$tmpdir/k9s.tar.gz"
+  if ! echo "$K9S_SHA256  $tmpdir/k9s.tar.gz" | sha256sum -c --quiet -; then
+    echo "ERROR: checksum de k9s no coincide. Abortando." >&2
+    rm -rf "$tmpdir"
+    exit 1
+  fi
+  tar -xzf "$tmpdir/k9s.tar.gz" -C "$tmpdir" k9s
+  install -m 0755 "$tmpdir/k9s" /usr/local/bin/k9s
+  rm -rf "$tmpdir"
+fi
+
+# 7. Autocompletado de bash (se regenera en cada ejecución)
 kubectl completion bash > /etc/bash_completion.d/kubectl
 helm completion bash    > /etc/bash_completion.d/helm
 k3d completion bash     > /etc/bash_completion.d/k3d
 gh completion -s bash   > /etc/bash_completion.d/gh
+k9s completion bash     > /etc/bash_completion.d/k9s
 
-# 7. Resumen
+# 8. Resumen
 echo "kubectl $(kubectl version --client -o json | awk -F'"' '/gitVersion/{print $4}')"
 echo "helm    $(helm version --short)"
 echo "k3d     $(k3d version | awk '/^k3d version/{print $3}') (k3s por defecto: $(k3d version | awk '/^k3s version/{print $3}'))"
+echo "k9s     $(k9s version -s | awk '/^Version/{print $2}')"
 echo "gh      $(gh --version | awk 'NR==1{print $3}')"

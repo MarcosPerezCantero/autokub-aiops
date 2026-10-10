@@ -87,7 +87,7 @@ cd autokub-aiops
 # Docker Engine (repositorio oficial, clave GPG verificada)
 sudo ./infra/bootstrap/install-docker.sh
 
-# kubectl, k3d, Helm, GitHub CLI y make (versiones fijadas, firmas y checksums verificados)
+# kubectl, k3d, Helm, k9s, GitHub CLI y make (versiones fijadas, firmas y checksums verificados)
 sudo ./infra/bootstrap/install-k8s-tools.sh
 ```
 
