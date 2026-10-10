@@ -7,7 +7,7 @@ DEMO_CHART := open-telemetry/opentelemetry-demo
 DEMO_CHART_VERSION := 0.42.3
 DEMO_VALUES := deploy/otel-demo/values.yaml
 
-.PHONY: up down status demo demo-down
+.PHONY: up stop down status demo demo-down
 
 up: ## Crea el clúster (idempotente)
 	@if k3d cluster list $(CLUSTER) >/dev/null 2>&1; then \
@@ -17,6 +17,9 @@ up: ## Crea el clúster (idempotente)
 	fi
 	kubectl wait --for=condition=Ready nodes --all --timeout=120s
 	kubectl get nodes -o wide
+
+stop: ## Para el clúster sin borrarlo (make up lo vuelve a arrancar tal cual)
+	k3d cluster stop $(CLUSTER)
 
 down: ## Destruye el clúster
 	k3d cluster delete $(CLUSTER)
