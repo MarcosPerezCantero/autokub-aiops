@@ -1,0 +1,25 @@
+# Values propios para el chart oficial open-telemetry/opentelemetry-demo.
+# Solo se declara lo que cambia respecto a los valores por defecto del chart.
+
+components:
+  # Asistente de compras con LLM (agent, chatbot, mcp): requiere una clave de API
+  # y no forma parte de los escenarios de operación del proyecto.
+  agent:
+    enabled: false
+  chatbot:
+    enabled: false
+  mcp:
+    enabled: false
+
+  # Entrada única a la tienda, Jaeger, Grafana y flagd a través del ingress de k3s (Traefik),
+  # publicado por k3d en http://localhost:8080 (ver infra/k3d/cluster.yaml).
+  frontend-proxy:
+    ingress:
+      enabled: true
+      ingressClassName: traefik
+      hosts:
+        - host: ""
+          paths:
+            - path: /
+              pathType: Prefix
+              port: 8080
