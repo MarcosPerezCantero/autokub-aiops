@@ -91,7 +91,13 @@ sudo ./infra/bootstrap/install-docker.sh
 sudo ./infra/bootstrap/install-k8s-tools.sh
 ```
 
-Los scripts son idempotentes: pueden ejecutarse varias veces y solo cambian lo que falta o está desactualizado. El clúster y el resto del laboratorio se añadirán como objetivos de `make`.
+Los scripts son idempotentes: pueden ejecutarse varias veces y solo cambian lo que falta o está desactualizado.
+
+```bash
+make up       # crea el clúster k3d (1 nodo de control + 2 de trabajo), definido en infra/k3d/cluster.yaml
+make status   # estado del clúster
+make down     # destruye el clúster
+```
 
 ## Hoja de ruta
 

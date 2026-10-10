@@ -1,0 +1,26 @@
+# Clúster del laboratorio: k3s dentro de contenedores Docker, gestionado por k3d.
+# Uso: make up / make down (desde la raíz del repositorio)
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: autokub
+
+# Un nodo de control (API de Kubernetes, scheduler) y dos nodos de trabajo.
+# Varios nodos permiten ver cómo el scheduler reparte pods y qué ocurre si un nodo cae.
+servers: 1
+agents: 2
+
+# Versión de Kubernetes fijada: debe coincidir con la minor de kubectl (install-k8s-tools.sh)
+image: rancher/k3s:v1.35.5-k3s1
+
+# El balanceador de k3d publica el puerto 80 del clúster (ingress) en localhost:8080 de la máquina,
+# accesible desde el navegador de Windows.
+ports:
+  - port: 8080:80
+    nodeFilters:
+      - loadbalancer
+
+options:
+  kubeconfig:
+    updateDefaultKubeconfig: true   # escribe el acceso en ~/.kube/config
+    switchCurrentContext: true      # kubectl apunta a este clúster
