@@ -126,14 +126,23 @@ if [[ "$(k9s version -s 2>/dev/null | awk '/^Version/{print $2}')" != "$K9S_VERS
   rm -rf "$tmpdir"
 fi
 
-# 7. Autocompletado de bash (se regenera en cada ejecución)
+# 7. Límites del kernel para k3d: todos los nodos y pods comparten el kernel de la VM y sus
+#    procesos corren como root, así que agotan las 128 instancias de inotify por defecto
+#    ("too many open files" en kubectl logs -f, k9s o los propios pods).
+cat > /etc/sysctl.d/99-autokub.conf <<SYSCTL
+fs.inotify.max_user_instances = 8192
+fs.inotify.max_user_watches = 524288
+SYSCTL
+sysctl -q -p /etc/sysctl.d/99-autokub.conf
+
+# 8. Autocompletado de bash (se regenera en cada ejecución)
 kubectl completion bash > /etc/bash_completion.d/kubectl
 helm completion bash    > /etc/bash_completion.d/helm
 k3d completion bash     > /etc/bash_completion.d/k3d
 gh completion -s bash   > /etc/bash_completion.d/gh
 k9s completion bash     > /etc/bash_completion.d/k9s
 
-# 8. Resumen
+# 9. Resumen
 echo "kubectl $(kubectl version --client -o json | awk -F'"' '/gitVersion/{print $4}')"
 echo "helm    $(helm version --short)"
 echo "k3d     $(k3d version | awk '/^k3d version/{print $3}') (k3s por defecto: $(k3d version | awk '/^k3s version/{print $3}'))"
