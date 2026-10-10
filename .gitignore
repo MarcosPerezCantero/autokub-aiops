@@ -1,0 +1,18 @@
+# Secretos y entorno local
+.env
+*.env.local
+kubeconfig*
+*.pem
+*.key
+
+# Python (agente)
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Editores / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

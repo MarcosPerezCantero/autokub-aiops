@@ -1,0 +1,5 @@
+# Finales de línea LF en todo el repo (el laboratorio corre en Linux;
+# un script bash con CRLF falla). Ver docs/adr/0002-entorno-laboratorio.md
+* text=auto eol=lf
+*.png binary
+*.jpg binary
