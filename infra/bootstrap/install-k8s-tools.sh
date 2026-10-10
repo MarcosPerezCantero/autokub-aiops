@@ -56,17 +56,26 @@ fetch_key() {
   rm -f "$tmp"
 }
 
-# 1. Dependencias para descargar por HTTPS y verificar claves, y make (objetivos up/down del laboratorio)
+# 1. Límites del kernel para k3d (lo primero: con el cupo agotado fallan hasta sudo y apt): todos los nodos y pods comparten el kernel de la VM y sus
+#    procesos corren como root, así que agotan las 128 instancias de inotify por defecto
+#    ("too many open files" en kubectl logs -f, k9s o los propios pods).
+cat > /etc/sysctl.d/99-autokub.conf <<SYSCTL
+fs.inotify.max_user_instances = 8192
+fs.inotify.max_user_watches = 524288
+SYSCTL
+sysctl -q -p /etc/sysctl.d/99-autokub.conf
+
+# 2. Dependencias para descargar por HTTPS y verificar claves, y make (objetivos up/down del laboratorio)
 apt-get update -qq
 apt-get install -y -qq ca-certificates curl gnupg make >/dev/null
 install -m 0755 -d "$KEYRINGS"
 
-# 2. Claves de firma de los tres repositorios apt
+# 3. Claves de firma de los tres repositorios apt
 fetch_key "https://pkgs.k8s.io/core:/stable:/${KUBE_MINOR}/deb/Release.key" "$KEYRINGS/kubernetes.asc" "$K8S_FPR"
 fetch_key "https://packages.buildkite.com/helm-linux/helm-debian/gpgkey"    "$KEYRINGS/helm.asc"       "$HELM_FPR"
 fetch_key "https://cli.github.com/packages/githubcli-archive-keyring.gpg"   "$KEYRINGS/githubcli.gpg"  "$GH_FPRS"
 
-# 3. Repositorios, cada uno limitado a paquetes firmados con su propia clave.
+# 4. Repositorios, cada uno limitado a paquetes firmados con su propia clave.
 #    Se borran antes posibles definiciones .list de instalaciones manuales previas.
 rm -f "$SOURCES"/kubernetes.list "$SOURCES"/helm-stable-debian.list "$SOURCES"/github-cli.list
 
@@ -95,11 +104,11 @@ Architectures: $ARCH
 Signed-By: $KEYRINGS/githubcli.gpg
 SRC
 
-# 4. kubectl, Helm y gh desde sus repositorios (apt no reinstala lo que ya está al día)
+# 5. kubectl, Helm y gh desde sus repositorios (apt no reinstala lo que ya está al día)
 apt-get update -qq
 apt-get install -y -qq kubectl helm gh >/dev/null
 
-# 5. k3d: binario de GitHub Releases, solo si falta o no es la versión fijada
+# 6. k3d: binario de GitHub Releases, solo si falta o no es la versión fijada
 if [[ "$(k3d version 2>/dev/null | awk '/^k3d version/{print $3}')" != "$K3D_VERSION" ]]; then
   tmp=$(mktemp)
   curl -fsSL "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64" -o "$tmp"
@@ -112,7 +121,7 @@ if [[ "$(k3d version 2>/dev/null | awk '/^k3d version/{print $3}')" != "$K3D_VER
   rm -f "$tmp"
 fi
 
-# 6. k9s: igual que k3d (binario de GitHub Releases, versión y checksum fijados)
+# 7. k9s: igual que k3d (binario de GitHub Releases, versión y checksum fijados)
 if [[ "$(k9s version -s 2>/dev/null | awk '/^Version/{print $2}')" != "$K9S_VERSION" ]]; then
   tmpdir=$(mktemp -d)
   curl -fsSL "https://github.com/derailed/k9s/releases/download/${K9S_VERSION}/k9s_Linux_amd64.tar.gz" -o "$tmpdir/k9s.tar.gz"
@@ -125,15 +134,6 @@ if [[ "$(k9s version -s 2>/dev/null | awk '/^Version/{print $2}')" != "$K9S_VERS
   install -m 0755 "$tmpdir/k9s" /usr/local/bin/k9s
   rm -rf "$tmpdir"
 fi
-
-# 7. Límites del kernel para k3d: todos los nodos y pods comparten el kernel de la VM y sus
-#    procesos corren como root, así que agotan las 128 instancias de inotify por defecto
-#    ("too many open files" en kubectl logs -f, k9s o los propios pods).
-cat > /etc/sysctl.d/99-autokub.conf <<SYSCTL
-fs.inotify.max_user_instances = 8192
-fs.inotify.max_user_watches = 524288
-SYSCTL
-sysctl -q -p /etc/sysctl.d/99-autokub.conf
 
 # 8. Autocompletado de bash (se regenera en cada ejecución)
 kubectl completion bash > /etc/bash_completion.d/kubectl
