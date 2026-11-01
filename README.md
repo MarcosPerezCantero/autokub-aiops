@@ -74,6 +74,7 @@ autokub-aiops/
 ├── deploy/      # manifiestos propios y values del chart (fuente de Argo CD)
 ├── agent/       # agente LangGraph
 ├── policies/    # políticas Rego y sus tests
+├── executor/    # ejecutor: único componente con permisos de escritura
 ├── scenarios/   # scripts que provocan cada incidente
 ├── runbooks/    # resolución manual de cada incidente
 └── docs/adr/    # registros de decisiones de arquitectura
@@ -103,6 +104,7 @@ make stop     # para el clúster sin borrarlo (make up lo reanuda)
 make demo     # despliega la tienda (chart oficial + deploy/otel-demo/values.yaml) en http://localhost:8080
 make down     # destruye el clúster
 make policies-test  # comprueba las políticas Rego y ejecuta sus tests
+make executor-test  # ejecuta los tests del ejecutor
 ```
 
 ## Hoja de ruta
