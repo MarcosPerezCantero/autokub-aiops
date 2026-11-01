@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Instala las herramientas cliente del laboratorio en Ubuntu sobre WSL2:
 #   kubectl (API de Kubernetes), k3d (clúster k3s en Docker), Helm (charts), k9s (interfaz de terminal),
-#   OPA (motor de políticas), gh (GitHub CLI) y make.
+#   OPA (motor de políticas), gh (GitHub CLI), make y venv de Python (dependencias del agente).
 # Idempotente: se puede ejecutar varias veces. Ver docs/adr/0002-entorno-laboratorio.md
 #
 # Uso (desde Ubuntu):   sudo ./install-k8s-tools.sh
@@ -68,9 +68,10 @@ fs.inotify.max_user_watches = 524288
 SYSCTL
 sysctl -q -p /etc/sysctl.d/99-autokub.conf
 
-# 2. Dependencias para descargar por HTTPS y verificar claves, y make (objetivos up/down del laboratorio)
+# 2. Dependencias para descargar por HTTPS y verificar claves, make (objetivos up/down del laboratorio)
+#    y python3-venv (entorno aislado del agente)
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl gnupg make >/dev/null
+apt-get install -y -qq ca-certificates curl gnupg make python3-venv >/dev/null
 install -m 0755 -d "$KEYRINGS"
 
 # 3. Claves de firma de los tres repositorios apt
