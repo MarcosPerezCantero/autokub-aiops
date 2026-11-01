@@ -28,12 +28,15 @@ Lo que **no** se simplifica es la frontera de seguridad: denegación por defecto
 1. Recuperar el clúster y añadir OPA al bootstrap.
 2. Escenario `scenarios/crashloop` repetible, y su reversión. Hay que comprobar su impacto real: en un rolling update el pod anterior sigue activo hasta que el nuevo está listo, de modo que la tienda podría seguir funcionando mientras la revisión falla. Si es así, la recuperación se mide sobre la salud del despliegue.
 3. Políticas Rego con tests, sin agente.
-4. Ejecutor: recibe una propuesta, consulta a OPA, actúa y registra.
+4. Ejecutor: recibe una propuesta, consulta a OPA, actúa y registra. Desde este paso, cada componente emite eventos JSON con un formato común (ver `docs/arquitectura.md`).
 5. Cadena completa con un proponedor de reglas fijas, sin LLM.
 6. Sustituir ese proponedor por el agente LangGraph.
 7. Verificación posterior y reintento acotado.
+8. Opcional: vista web que muestre el flujo en directo a partir de los eventos.
 
 El paso 5 es deliberado: demuestra la cadena sin depender del modelo, y deja una referencia con la que comparar al agente.
+
+El paso 8 queda fuera del criterio de terminado. Los eventos se emiten desde el principio porque cuestan poco y sirven también como auditoría; la vista se aborda solo cuando la cadena funciona.
 
 ### Criterio de terminado
 - Un comando provoca el incidente y el sistema lo resuelve sin intervención humana.

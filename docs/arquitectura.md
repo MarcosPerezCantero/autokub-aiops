@@ -125,6 +125,34 @@ Entrada que el ejecutor envía a la política:
 { "allow": false, "deny_reasons": ["target no permitido"] }
 ```
 
+## Trazabilidad del flujo
+
+Cada componente emite un evento por cada paso del incidente, con un formato común:
+
+```json
+{
+  "incident_id": "inc-0042",
+  "timestamp": "2026-01-01T12:00:00Z",
+  "component": "opa",
+  "event": "action_denied",
+  "summary": "target no permitido",
+  "data": { "action": "rollout_undo", "target": "flagd" }
+}
+```
+
+Los eventos previstos son `incident_detected`, `action_proposed`, `action_allowed`, `action_denied`, `action_executed`, `verification_passed`, `verification_failed`, `incident_escalated` e `incident_closed`. El `incident_id` permite reconstruir el recorrido completo de cada incidente.
+
+Sobre estos eventos se apoyan dos usos:
+
+- **Auditoría y evaluación:** de ellos salen los tiempos y las acciones bloqueadas.
+- **Vista del flujo (opcional):** una página web que muestra en directo por qué paso va cada incidente y dónde se ha detenido.
+
+Langfuse complementa esta vista con el detalle interno del agente: prompts, respuestas, herramientas y coste. La vista propia cubre lo que Langfuse no ve: el recorrido por OPA, el ejecutor y Kubernetes.
+
+La vista es de **solo lectura**: no tiene ninguna forma de actuar sobre el clúster, para no abrir un camino alternativo al ejecutor, y el sistema funciona igual sin ella.
+
+Los eventos pueden contener texto que procede de logs, por lo que la vista debe tratarlo como contenido no fiable y mostrarlo escapado.
+
 ## Prompt injection indirecta
 
 Los logs y eventos son datos que pueden contener instrucciones maliciosas. Se asume que algún intento puede engañar al modelo, y la defensa no depende de evitarlo: aunque el agente proponga una acción dañina, tiene que superar la validación, OPA y RBAC. Marcar el contenido no fiable en el prompt reduce la probabilidad de engaño, pero no se cuenta como control de seguridad.
