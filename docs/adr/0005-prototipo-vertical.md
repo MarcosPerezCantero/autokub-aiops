@@ -21,6 +21,7 @@ Simplificaciones admitidas, cada una con su sustitución prevista:
 | Ejecución directa por la API de Kubernetes | Según ADR 0003 |
 | Tienda desplegada con el chart oficial | Manifiestos propios y Argo CD |
 | Trazas del agente en logs estructurados | Langfuse |
+| SDK de Anthropic directo | LiteLLM como pasarela |
 
 Lo que **no** se simplifica es la frontera de seguridad: denegación por defecto, separación entre quien propone y quien ejecuta, y tests de las políticas. Es la tesis del proyecto, y añadirla después invalidaría lo aprendido.
 

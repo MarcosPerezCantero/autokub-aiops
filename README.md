@@ -104,9 +104,11 @@ make stop     # para el clúster sin borrarlo (make up lo reanuda)
 make demo     # despliega la tienda (chart oficial + deploy/otel-demo/values.yaml) en http://localhost:8080
 make down     # destruye el clúster
 make policies-test  # comprueba las políticas Rego y ejecuta sus tests
-make agent-test     # ejecuta los tests del ejecutor y del detector
+make venv           # crea el entorno de Python del agente
+make agent-test     # ejecuta los tests del ejecutor y del agente
 make auth           # crea las cuentas del lector y del ejecutor (tokens de 24 h)
-make prototype      # arranca OPA, ejecutor y detector
+make prototype      # arranca la cadena con reglas fijas
+make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthropic.env)
 ```
 
 ## Hoja de ruta

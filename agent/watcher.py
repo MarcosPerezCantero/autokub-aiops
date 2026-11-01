@@ -82,11 +82,11 @@ class Watcher:
         self.events_file = events_file
         self.active = {}
 
-    def emit(self, incident_id, event, summary, **data):
+    def emit(self, incident_id, event, summary, component="detector", **data):
         record = {
             "incident_id": incident_id,
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "component": "detector",
+            "component": component,
             "event": event,
             "summary": str(summary)[:500],
             "data": data,
@@ -114,11 +114,12 @@ class Watcher:
                 self.remediate(state, incident)
 
     def remediate(self, state, incident):
-        result = self.send({"incident_id": state["id"], "action": self.propose(incident)})
+        action = self.propose({**incident, "id": state["id"]})
+        result = self.send({"incident_id": state["id"], "action": action})
         if result.get("status") == "unreachable":
             return  # Se reintenta en la siguiente vuelta
         state["handled"] = True
-        if result.get("status") != "executed":
+        if result.get("status") not in ("executed", "escalated"):
             reasons = ", ".join(result.get("reasons", [])) or "sin motivo"
             summary = f"{incident['deployment']}: {result.get('status')} ({reasons})"
             self.send({"incident_id": state["id"], "action": {"type": "escalate", "params": {"summary": summary}}})
@@ -126,7 +127,11 @@ class Watcher:
 
 def main():
     watcher = Watcher()
-    print("Detector en marcha", flush=True)
+    if os.environ.get("AUTOKUB_PROPOSER") == "llm":
+        import llm_agent
+
+        watcher.propose = lambda incident: llm_agent.propose(incident, emit=watcher.emit)
+    print(f"Detector en marcha (proponedor: {os.environ.get('AUTOKUB_PROPOSER', 'rules')})", flush=True)
     while True:
         try:
             watcher.tick(get_json("pods")["items"], get_json("replicasets")["items"])

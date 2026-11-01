@@ -111,6 +111,11 @@ class WatcherTest(unittest.TestCase):
         self.assertEqual(len(self.sent), 2)
         self.assertEqual(self.events(), ["incident_detected"])
 
+    def test_escalation_by_proposer_is_not_repeated(self):
+        self.responses = [{"status": "escalated"}]
+        self.watcher().tick([pod("p", "rs-new", 2, False)], REPLICA_SETS)
+        self.assertEqual(len(self.sent), 1)
+
     def test_independent_incidents_are_handled_separately(self):
         pods = [pod("a", "rs-new", 2, False), pod("b", "rs-pay", 2, False)]
         self.watcher().tick(pods, REPLICA_SETS)
