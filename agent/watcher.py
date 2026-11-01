@@ -133,7 +133,7 @@ class Watcher:
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "component": component,
             "event": event,
-            "summary": str(summary)[:500],
+            "summary": str(summary)[:2000],
             "data": data,
         }
         os.makedirs(os.path.dirname(self.events_file) or ".", exist_ok=True)

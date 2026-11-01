@@ -19,6 +19,7 @@ EFFORT = os.environ.get("AUTOKUB_EFFORT", "medium")
 MAX_STEPS = 8
 MAX_TOOL_OUTPUT = 6000
 MAX_LOG_LINES = 60
+MAX_EVENT_RESULT = 1500
 K8S_NAME = re.compile(r"^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$")
 SENSITIVE_NAME = re.compile(r"PASSWORD|PASSWD|SECRET|TOKEN|KEY|CONNECTION|CREDENTIAL|AUTH|DSN", re.IGNORECASE)
 URL_CREDENTIALS = re.compile(r"://[^/\s:@]+:[^/\s@]+@")
@@ -226,14 +227,14 @@ class State(TypedDict):
     model: str | None
 
 
-def build_graph(client):
+def build_graph(client, emit, incident_id):
     def think(state):
         response = client.beta.messages.create(
             model=MODEL,
             max_tokens=16000,
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
-            thinking={"type": "adaptive"},
+            thinking={"type": "adaptive", "display": "summarized"},
             output_config={"effort": EFFORT},
             system=SYSTEM_PROMPT,
             tools=TOOLS,
@@ -247,6 +248,13 @@ def build_graph(client):
             "output_tokens": state["output_tokens"] + response.usage.output_tokens,
             "model": response.model,
         }
+        for block in response.content:
+            if block.type == "thinking" and block.thinking:
+                emit(incident_id, "agent_thinking", block.thinking, component="agent")
+            elif block.type == "text" and block.text:
+                emit(incident_id, "agent_text", block.text, component="agent")
+            elif block.type == "tool_use" and block.name != "propose_action":
+                emit(incident_id, "agent_tool_call", block.name, component="agent", args=block.input)
         calls = [block for block in response.content if block.type == "tool_use"]
         proposal = next((call.input for call in calls if call.name == "propose_action"), None)
         if response.stop_reason == "refusal":
@@ -262,10 +270,11 @@ def build_graph(client):
         return update
 
     def tools(state):
-        results = [
-            {"type": "tool_result", "tool_use_id": call.id, "content": run_tool(call.name, call.input)}
-            for call in state["pending"]
-        ]
+        results = []
+        for call in state["pending"]:
+            output = run_tool(call.name, call.input)
+            emit(incident_id, "agent_tool_result", output[:MAX_EVENT_RESULT], component="agent", tool=call.name)
+            results.append({"type": "tool_result", "tool_use_id": call.id, "content": output})
         return {"messages": state["messages"] + [{"role": "user", "content": results}], "pending": []}
 
     graph = StateGraph(State)
@@ -277,10 +286,10 @@ def build_graph(client):
     return graph.compile()
 
 
-def diagnose(incident, client=None):
+def diagnose(incident, client=None, emit=lambda *args, **kwargs: None):
     client = client or anthropic.Anthropic()
     prompt = f"Incidente detectado:\n{untrusted(json.dumps(incident, ensure_ascii=False))}"
-    return build_graph(client).invoke(
+    return build_graph(client, emit, incident.get("id")).invoke(
         {
             "messages": [{"role": "user", "content": prompt}],
             "pending": [],
@@ -299,7 +308,7 @@ def propose(incident, emit=None, client=None):
     """Devuelve la acción propuesta. Si el agente falla, escala: nunca actúa por defecto."""
     emit = emit or (lambda *args, **kwargs: None)
     try:
-        result = diagnose(incident, client)
+        result = diagnose(incident, client, emit)
     except (anthropic.AnthropicError, subprocess.SubprocessError, ValueError) as error:
         summary = f"{incident.get('deployment')}: error del agente ({type(error).__name__})"
         emit(incident.get("id"), "agent_failed", summary, component="agent")

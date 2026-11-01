@@ -146,12 +146,12 @@ Cada componente emite un evento por cada paso del incidente, con un formato com�
 }
 ```
 
-Los eventos son `incident_detected`, `agent_diagnosis`, `agent_failed`, `action_proposed`, `action_rejected`, `action_allowed`, `action_denied`, `action_executed`, `action_failed`, `verification_passed`, `verification_failed`, `incident_escalated` e `incident_closed`. El `incident_id` permite reconstruir el recorrido completo de cada incidente.
+Los eventos son `incident_detected`, `agent_thinking`, `agent_text`, `agent_tool_call`, `agent_tool_result`, `agent_diagnosis`, `agent_failed`, `action_proposed`, `action_rejected`, `action_allowed`, `action_denied`, `action_executed`, `action_failed`, `verification_passed`, `verification_failed`, `incident_escalated` e `incident_closed`. El `incident_id` permite reconstruir el recorrido completo de cada incidente.
 
 Sobre estos eventos se apoyan dos usos:
 
 - **Auditoría y evaluación:** de ellos salen los tiempos y las acciones bloqueadas.
-- **Vista del flujo (opcional):** una página web que muestra en directo por qué paso va cada incidente y dónde se ha detenido.
+- **Vista del flujo:** una página web que muestra en directo por qué paso va cada incidente, dónde se ha detenido y qué ha leído y razonado el agente. El razonamiento es el resumen que devuelve la API, no el proceso interno en bruto.
 
 Langfuse complementa esta vista con el detalle interno del agente: prompts, respuestas, herramientas y coste. La vista propia cubre lo que Langfuse no ve: el recorrido por OPA, el ejecutor y Kubernetes.
 

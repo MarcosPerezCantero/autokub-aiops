@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autokub: flujo del agente</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #171e26; --line: #2a3441; --text: #e6edf3; --muted: #8b98a8;
+    --active: #58a6ff; --ok: #3fb950; --bad: #f85149; --warn: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, "Segoe UI", sans-serif; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 24px; border-bottom: 1px solid var(--line); }
+  h1 { margin: 0; font-size: 18px; }
+  h2 { margin: 0 0 12px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  main { max-width: 1280px; margin: 0 auto; padding: 20px 24px; }
+  .live { color: var(--muted); font-size: 13px; }
+  .live b { color: var(--ok); }
+  .live.off b { color: var(--bad); }
+  .incidents { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .incidents button { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+  .incidents button.selected { border-color: var(--active); }
+  .banner { padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; background: var(--panel); border-left: 4px solid var(--line); }
+  .banner.closed { border-left-color: var(--ok); }
+  .banner.escalated { border-left-color: var(--warn); }
+  .banner.running { border-left-color: var(--active); }
+  .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 28px; margin-bottom: 24px; }
+  .stage { position: relative; background: var(--panel); border: 2px solid var(--line); border-radius: 8px; padding: 14px; min-height: 104px; transition: border-color .3s; }
+  .stage:not(:last-child)::after { content: "→"; position: absolute; right: -24px; top: 34px; color: var(--muted); font-size: 18px; }
+  .stage strong { display: block; }
+  .stage small { display: block; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
+  .stage.active { border-color: var(--active); }
+  .stage.ok { border-color: var(--ok); }
+  .stage.bad { border-color: var(--bad); }
+  .stage.warn { border-color: var(--warn); }
+  .columns { display: grid; grid-template-columns: 3fr 2fr; gap: 20px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; min-width: 0; }
+  .entry { padding: 10px 0; border-top: 1px solid var(--line); }
+  .entry:first-of-type { border-top: 0; }
+  .entry .kind { font-size: 12px; color: var(--muted); }
+  .entry p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .entry pre { margin: 6px 0 0; padding: 8px; max-height: 220px; overflow: auto; background: var(--bg); border-radius: 4px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .usage { margin-top: 12px; color: var(--muted); font-size: 13px; }
+  .row { display: grid; grid-template-columns: 70px 84px 1fr; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .row:first-of-type { border-top: 0; }
+  .row time, .row span { color: var(--muted); }
+  .row div { overflow-wrap: anywhere; min-width: 0; }
+  .empty { color: var(--muted); }
+  @media (max-width: 860px) {
+    .flow { grid-template-columns: 1fr; gap: 12px; }
+    .stage:not(:last-child)::after { display: none; }
+    .columns { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Autokub: flujo del agente</h1>
+  <div class="live" id="live"><b>●</b> <span id="live-text">conectando</span></div>
+</header>
+<main>
+  <div class="incidents" id="incidents"></div>
+  <div class="banner" id="banner">Sin incidentes todavía. Provoca uno con <code>./scenarios/crashloop/inject.sh</code></div>
+  <section class="flow" id="flow"></section>
+  <div class="columns">
+    <section class="panel">
+      <h2>Razonamiento del agente</h2>
+      <div id="agent"><div class="empty">Aquí aparecerá lo que el agente piensa, lee y concluye.</div></div>
+      <div class="usage" id="usage"></div>
+    </section>
+    <section class="panel">
+      <h2>Registro de eventos</h2>
+      <div id="timeline"><div class="empty">Sin eventos.</div></div>
+    </section>
+  </div>
+</main>
+<script>
+const STAGES = [
+  ["detector", "Detector", "Vigila los pods"],
+  ["agent", "Agente", "Diagnostica y propone"],
+  ["opa", "OPA", "Autoriza o bloquea"],
+  ["executor", "Ejecutor", "Aplica la acción"],
+  ["verify", "Verificación", "Comprueba la recuperación"],
+];
+
+// Cómo afecta cada evento a la cadena: etapa, estado y texto
+const EFFECTS = {
+  incident_detected: ["detector", "ok", "Fallo detectado"],
+  agent_thinking: ["agent", "active", "Pensando"],
+  agent_text: ["agent", "active", "Pensando"],
+  agent_tool_call: ["agent", "active", "Leyendo el clúster"],
+  agent_tool_result: ["agent", "active", "Leyendo el clúster"],
+  agent_diagnosis: ["agent", "ok", "Propuesta lista"],
+  agent_failed: ["agent", "bad", "Sin propuesta"],
+  action_rejected: ["opa", "bad", "Rechazada por formato"],
+  action_allowed: ["opa", "ok", "Autorizada"],
+  action_denied: ["opa", "bad", "Bloqueada"],
+  action_executed: ["executor", "ok", "Aplicada"],
+  action_failed: ["executor", "bad", "Falló al aplicarla"],
+  verification_passed: ["verify", "ok", "Recuperación verificada"],
+  verification_failed: ["verify", "bad", "Sin recuperar"],
+};
+
+const LABELS = {
+  incident_detected: "Incidente detectado", agent_thinking: "Razonamiento", agent_text: "Comentario del agente",
+  agent_tool_call: "Herramienta", agent_tool_result: "Resultado", agent_diagnosis: "Diagnóstico",
+  agent_failed: "El agente no pudo proponer", action_proposed: "Acción propuesta", action_rejected: "Propuesta rechazada",
+  action_allowed: "OPA autoriza", action_denied: "OPA bloquea", action_executed: "Acción aplicada",
+  action_failed: "Fallo al aplicar", verification_passed: "Verificación superada", verification_failed: "Verificación fallida",
+  incident_escalated: "Aviso a una persona", incident_closed: "Incidente cerrado",
+};
+
+let total = 0;
+let events = [];
+let selected = null;
+let followLatest = true;
+
+const $ = (id) => document.getElementById(id);
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  // textContent: los eventos pueden contener texto de logs, nunca se interpreta como HTML
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function localTime(timestamp) {
+  const date = new Date(timestamp);
+  return isNaN(date) ? "" : date.toLocaleTimeString("es-ES");
+}
+
+function incidentIds() {
+  return [...new Set(events.map((e) => e.incident_id).filter(Boolean))];
+}
+
+function renderIncidents() {
+  const box = $("incidents");
+  box.replaceChildren();
+  for (const id of incidentIds()) {
+    const first = events.find((e) => e.incident_id === id);
+    const button = el("button", id === selected ? "selected" : "", `${first.summary.slice(0, 28)} · ${localTime(first.timestamp)}`);
+    button.onclick = () => { selected = id; followLatest = id === incidentIds().at(-1); render(); };
+    box.append(button);
+  }
+}
+
+function renderFlow(items) {
+  const state = Object.fromEntries(STAGES.map(([key, , hint]) => [key, { status: "", note: hint }]));
+  for (const event of items) {
+    const effect = EFFECTS[event.event];
+    if (effect) state[effect[0]] = { status: effect[1], note: effect[2] };
+    if (event.event === "action_denied") state.opa.note = `Bloqueada: ${event.summary}`;
+    if (event.event === "action_proposed" && event.summary !== "escalate") {
+      state.agent = { status: "ok", note: `Propone ${event.summary}` };
+      state.opa = { status: "active", note: "Evaluando" };
+    }
+    if (event.event === "action_allowed") state.executor = { status: "active", note: "Aplicando" };
+    if (event.event === "action_executed") state.verify = { status: "active", note: "Esperando estabilidad" };
+    if (event.event === "incident_detected") state.agent = { status: "active", note: "Diagnosticando" };
+  }
+  $("flow").replaceChildren(...STAGES.map(([key, title]) => {
+    const stage = el("div", `stage ${state[key].status}`);
+    stage.append(el("strong", "", title), el("small", "", state[key].note));
+    return stage;
+  }));
+}
+
+function renderBanner(items) {
+  const banner = $("banner");
+  const last = [...items].reverse().find((e) => ["incident_closed", "incident_escalated"].includes(e.event));
+  const escalated = items.find((e) => e.event === "incident_escalated");
+  const closed = items.find((e) => e.event === "incident_closed");
+  if (escalated) {
+    banner.className = "banner escalated";
+    banner.textContent = `Aviso a una persona: ${escalated.summary}`;
+  } else if (closed) {
+    banner.className = "banner closed";
+    banner.textContent = `Resuelto sin intervención humana: ${closed.summary}`;
+  } else if (items.length) {
+    banner.className = "banner running";
+    banner.textContent = `Incidente en curso: ${items[0].summary}`;
+  }
+  return last;
+}
+
+function renderAgent(items) {
+  const box = $("agent");
+  const entries = items.filter((e) => e.event.startsWith("agent_"));
+  box.replaceChildren();
+  if (!entries.length) {
+    box.append(el("div", "empty", "Este incidente no ha pasado por el agente LLM."));
+  }
+  for (const event of entries) {
+    const entry = el("div", "entry");
+    entry.append(el("div", "kind", `${localTime(event.timestamp)} · ${LABELS[event.event] || event.event}`));
+    if (event.event === "agent_tool_call") {
+      entry.append(el("p", "", `${event.summary} ${JSON.stringify(event.data.args || {})}`));
+    } else if (event.event === "agent_tool_result") {
+      entry.append(el("pre", "", event.summary));
+    } else {
+      entry.append(el("p", "", event.summary));
+    }
+    box.append(entry);
+  }
+  const usage = [...items].reverse().find((e) => e.data && e.data.input_tokens !== undefined);
+  $("usage").textContent = usage
+    ? `Modelo ${usage.data.model} · ${usage.data.steps} pasos · ${usage.data.input_tokens} tokens de entrada, ${usage.data.output_tokens} de salida`
+    : "";
+}
+
+function renderTimeline(items) {
+  const box = $("timeline");
+  const rows = items.filter((e) => !["agent_thinking", "agent_text", "agent_tool_result"].includes(e.event));
+  box.replaceChildren();
+  if (!rows.length) box.append(el("div", "empty", "Sin eventos."));
+  for (const event of rows) {
+    const row = el("div", "row");
+    const detail = el("div", "");
+    detail.append(el("b", "", LABELS[event.event] || event.event));
+    if (event.event !== "agent_diagnosis") detail.append(` ${event.summary.slice(0, 120)}`);
+    row.append(el("time", "", localTime(event.timestamp)), el("span", "", event.component), detail);
+    box.append(row);
+  }
+}
+
+function render() {
+  const ids = incidentIds();
+  if (followLatest || !ids.includes(selected)) selected = ids.at(-1) || null;
+  renderIncidents();
+  const items = events.filter((e) => e.incident_id === selected);
+  if (!items.length) return;
+  renderFlow(items);
+  renderBanner(items);
+  renderAgent(items);
+  renderTimeline(items);
+}
+
+async function poll() {
+  try {
+    const response = await fetch(`/api/events?after=${total}`);
+    const data = await response.json();
+    if (data.total < total) { events = []; total = 0; return; }
+    if (data.events.length) {
+      events = events.concat(data.events);
+      render();
+    }
+    total = data.total;
+    $("live").className = "live";
+    $("live-text").textContent = "en directo";
+  } catch {
+    $("live").className = "live off";
+    $("live-text").textContent = "sin conexión";
+  }
+}
+
+renderFlow([]);
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>

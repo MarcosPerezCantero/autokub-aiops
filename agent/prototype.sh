@@ -15,7 +15,9 @@ opa run --server --addr 127.0.0.1:8181 --log-level error policies/remediation.re
 OPA_PID=$!
 python3 executor/executor.py > /dev/null &
 EXECUTOR_PID=$!
-trap 'kill "$OPA_PID" "$EXECUTOR_PID" 2>/dev/null' EXIT
+python3 viewer/server.py &
+VIEWER_PID=$!
+trap 'kill "$OPA_PID" "$EXECUTOR_PID" "$VIEWER_PID" 2>/dev/null' EXIT
 sleep 2
 
 # La clave de API solo la recibe este proceso, que no tiene permisos de escritura

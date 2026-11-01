@@ -48,6 +48,7 @@ venv: ## Crea el entorno de Python del agente con versiones fijadas
 agent-test: ## Ejecuta los tests del ejecutor y del agente
 	cd executor && python3 -m unittest
 	cd agent && ../.venv/bin/python -m unittest
+	cd viewer && python3 -m unittest
 
 auth: ## Aplica el RBAC y genera los kubeconfig temporales (24 h)
 	./infra/service-accounts.sh

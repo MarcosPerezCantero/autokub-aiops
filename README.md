@@ -75,6 +75,7 @@ autokub-aiops/
 ├── agent/       # agente LangGraph
 ├── policies/    # políticas Rego y sus tests
 ├── executor/    # ejecutor: único componente con permisos de escritura
+├── viewer/      # vista web del flujo, de solo lectura
 ├── scenarios/   # scripts que provocan cada incidente
 ├── runbooks/    # resolución manual de cada incidente
 └── docs/adr/    # registros de decisiones de arquitectura
@@ -109,6 +110,7 @@ make agent-test     # ejecuta los tests del ejecutor y del agente
 make auth           # crea las cuentas del lector y del ejecutor (tokens de 24 h)
 make prototype      # arranca la cadena con reglas fijas
 make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthropic.env)
+                    # vista del flujo en http://localhost:8091
 ```
 
 ## Hoja de ruta

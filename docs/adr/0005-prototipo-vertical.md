@@ -37,7 +37,7 @@ Lo que **no** se simplifica es la frontera de seguridad: denegación por defecto
 
 El paso 5 es deliberado: demuestra la cadena sin depender del modelo, y deja una referencia con la que comparar al agente.
 
-El paso 8 queda fuera del criterio de terminado. Los eventos se emiten desde el principio porque cuestan poco y sirven también como auditoría; la vista se aborda solo cuando la cadena funciona.
+El paso 8 queda fuera del criterio de terminado: `viewer/`. Los eventos se emiten desde el principio porque cuestan poco y sirven también como auditoría; la vista se aborda solo cuando la cadena funciona.
 
 ### Criterio de terminado
 - Un comando provoca el incidente y el sistema lo resuelve sin intervención humana.

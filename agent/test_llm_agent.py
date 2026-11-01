@@ -62,18 +62,25 @@ class ProposeTest(unittest.TestCase):
         self.assertEqual(
             action, {"type": "rollout_undo", "namespace": "otel-demo", "target": "cart", "params": {}}
         )
-        self.assertEqual(self.emitted[0][0], "agent_diagnosis")
-        self.assertEqual(self.emitted[0][2]["input_tokens"], 100)
+        self.assertEqual(self.emitted[-1][0], "agent_diagnosis")
+        self.assertEqual(self.emitted[-1][2]["input_tokens"], 100)
 
     def test_reads_then_proposes_and_sums_usage(self):
         with mock.patch.object(llm_agent, "run_tool", return_value="datos") as tool:
             action, client = self.run_agent([reply([tool_call("list_pods", {})]), reply([UNDO])])
         tool.assert_called_once_with("list_pods", {})
         self.assertEqual(action["type"], "rollout_undo")
-        self.assertEqual(self.emitted[0][2]["steps"], 2)
-        self.assertEqual(self.emitted[0][2]["input_tokens"], 200)
+        self.assertEqual(self.emitted[-1][2]["steps"], 2)
+        self.assertEqual(self.emitted[-1][2]["input_tokens"], 200)
         result = client.calls[1]["messages"][-1]["content"][0]
         self.assertEqual((result["type"], result["tool_use_id"], result["content"]), ("tool_result", "t1", "datos"))
+
+    def test_reasoning_and_tools_are_emitted(self):
+        thinking = NS(type="thinking", thinking="reviso la revisión")
+        with mock.patch.object(llm_agent, "run_tool", return_value="datos"):
+            self.run_agent([reply([thinking, tool_call("list_pods", {})]), reply([UNDO])])
+        kinds = [event for event, _, _ in self.emitted]
+        self.assertEqual(kinds, ["agent_thinking", "agent_tool_call", "agent_tool_result", "agent_diagnosis"])
 
     def test_namespace_is_not_chosen_by_model(self):
         proposal = {"type": "rollout_undo", "target": "cart", "namespace": "kube-system", "memory_bytes": None}
