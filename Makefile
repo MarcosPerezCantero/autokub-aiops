@@ -7,7 +7,7 @@ DEMO_CHART := open-telemetry/opentelemetry-demo
 DEMO_CHART_VERSION := 0.42.3
 DEMO_VALUES := deploy/otel-demo/values.yaml
 
-.PHONY: up stop down status demo demo-down policies-test executor-test executor-auth opa executor
+.PHONY: up stop down status demo demo-down policies-test agent-test auth prototype
 
 up: ## Crea el clúster (idempotente)
 	@if k3d cluster list $(CLUSTER) >/dev/null 2>&1; then \
@@ -41,14 +41,12 @@ policies-test: ## Comprueba las políticas y ejecuta sus tests
 	opa fmt --fail --list policies
 	opa test policies
 
-executor-test: ## Ejecuta los tests del ejecutor
-	cd executor && python3 -m unittest -v
+agent-test: ## Ejecuta los tests del ejecutor y del detector
+	cd executor && python3 -m unittest
+	cd agent && python3 -m unittest
 
-executor-auth: ## Aplica el RBAC del ejecutor y genera su kubeconfig temporal
-	./executor/kubeconfig.sh
+auth: ## Aplica el RBAC y genera los kubeconfig temporales (24 h)
+	./infra/service-accounts.sh
 
-opa: ## Arranca OPA con las políticas (primer plano)
-	opa run --server --addr 127.0.0.1:8181 --log-level error policies/remediation.rego
-
-executor: ## Arranca el ejecutor (primer plano)
-	python3 executor/executor.py
+prototype: ## Arranca OPA, ejecutor y detector (Ctrl+C para detener)
+	./agent/prototype.sh
