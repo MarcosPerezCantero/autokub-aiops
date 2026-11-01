@@ -38,12 +38,15 @@ El agente opera sobre un catálogo cerrado, con prioridad para los casos en que 
 
 | # | Incidente | Remediación esperada |
 |---|-----------|----------------------|
-| 1 | Pod en `CrashLoopBackOff` | Diagnóstico y reinicio o rollback |
-| 2 | Contenedor `OOMKilled` | Ajuste de límites o escalado |
-| 3 | Despliegue que degrada la latencia | Rollback a la versión anterior |
-| 4 | Drift de configuración | Detección y corrección |
+| 1 | Pod en `CrashLoopBackOff` | Diagnóstico y rollback |
+| 2 | Fallo con síntoma y causa en servicios distintos | Localizar el servicio causante y hacer rollback |
+| 3 | Contenedor `OOMKilled` | Ajuste acotado de límites y aviso a una persona |
+| 4 | Despliegue que degrada la latencia | Rollback a la versión anterior |
+| 5 | Drift de configuración (opcional) | Detección y corrección |
 
 Cada incidente tiene un script que lo provoca (`scenarios/`) y un runbook de resolución manual (`runbooks/`), que sirve como línea base para medir al agente.
+
+Las acciones permitidas al agente también forman una lista cerrada: ver [ADR 0004](docs/adr/0004-alcance-del-agente.md). La [arquitectura](docs/arquitectura.md) detalla los componentes y la frontera de seguridad, y el [plan de evaluación](docs/evaluacion.md) cómo se mide el resultado.
 
 ## Producto objetivo
 
@@ -104,12 +107,13 @@ make down     # destruye el clúster
 ## Hoja de ruta
 
 - [x] Entorno reproducible del laboratorio (Docker Engine, kubectl, k3d, Helm)
-- [ ] Despliegue del producto en Kubernetes (manifiestos propios + chart oficial)
-- [ ] Observabilidad: dashboards y alertas para los cuatro incidentes
+- [x] Despliegue del producto en Kubernetes con el chart oficial
+- [ ] Prototipo vertical: un incidente de extremo a extremo (detección → agente → OPA → ejecución → verificación)
+- [ ] Observabilidad: dashboards y alertas para los incidentes del catálogo
 - [ ] Escenarios y runbooks manuales; MTTR de referencia
-- [ ] CI/CD en el fork y GitOps con Argo CD
-- [ ] Agente: diagnóstico de solo lectura → autorización OPA → ejecución y verificación
-- [ ] Evaluación: agente frente a resolución manual (acierto, MTTR, acciones bloqueadas, coste) y pruebas de prompt injection
+- [ ] Manifiestos propios, CI/CD en el fork y GitOps con Argo CD
+- [ ] Agente: ampliación al resto del catálogo
+- [ ] Evaluación: agente frente a reglas fijas y resolución manual (acierto, MTTR, acciones bloqueadas, coste) y pruebas de prompt injection
 
 ## Decisiones de arquitectura
 
@@ -117,3 +121,5 @@ make down     # destruye el clúster
 |-----|----------|
 | [0001](docs/adr/0001-producto-objetivo.md) | Producto objetivo: fork de la OpenTelemetry Demo |
 | [0002](docs/adr/0002-entorno-laboratorio.md) | Entorno del laboratorio: Ubuntu en WSL2 con Docker Engine |
+| [0004](docs/adr/0004-alcance-del-agente.md) | Alcance del agente: incidentes y acciones permitidas |
+| [0005](docs/adr/0005-prototipo-vertical.md) | Prototipo vertical antes de completar la plataforma |
