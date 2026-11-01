@@ -69,15 +69,17 @@ sequenceDiagram
     else Permitida
         O-->>E: allow
         E->>K: Ejecuta la acción
-        E->>K: Verifica la recuperación
-        alt Recuperado
-            E-->>A: Incidente cerrado
-        else Sin recuperar
-            E-->>A: Fallo de verificación
-            A->>E: Reintento acotado o escalado
+        D->>K: Verifica la recuperación
+        alt Estable durante 30 s
+            D->>D: Incidente cerrado
+        else Sin recuperar en 2 min
+            D->>A: Pide otra acción con el historial (máximo 2 intentos)
+            A->>E: Nueva propuesta o escalado
         end
     end
 ```
+
+La verificación es de solo lectura, por lo que la hace el detector. Un despliegue se considera sano si todas sus réplicas son de la revisión actual, todos sus contenedores están listos y los reinicios no aumentan durante 30 segundos. Esta ventana es necesaria porque los servicios no tienen readiness probes y `kubectl get deployment` puede mostrar 1/1 con una revisión rota mientras sigue activa la anterior.
 
 ## Frontera de seguridad
 
@@ -144,7 +146,7 @@ Cada componente emite un evento por cada paso del incidente, con un formato com�
 }
 ```
 
-Los eventos previstos son `incident_detected`, `action_proposed`, `action_allowed`, `action_denied`, `action_executed`, `verification_passed`, `verification_failed`, `incident_escalated` e `incident_closed`. El `incident_id` permite reconstruir el recorrido completo de cada incidente.
+Los eventos son `incident_detected`, `agent_diagnosis`, `agent_failed`, `action_proposed`, `action_rejected`, `action_allowed`, `action_denied`, `action_executed`, `action_failed`, `verification_passed`, `verification_failed`, `incident_escalated` e `incident_closed`. El `incident_id` permite reconstruir el recorrido completo de cada incidente.
 
 Sobre estos eventos se apoyan dos usos:
 
