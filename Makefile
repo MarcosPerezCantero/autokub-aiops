@@ -7,7 +7,7 @@ DEMO_CHART := open-telemetry/opentelemetry-demo
 DEMO_CHART_VERSION := 0.42.3
 DEMO_VALUES := deploy/otel-demo/values.yaml
 
-.PHONY: up stop down status demo demo-down
+.PHONY: up stop down status demo demo-down policies-test
 
 up: ## Crea el clúster (idempotente)
 	@if k3d cluster list $(CLUSTER) >/dev/null 2>&1; then \
@@ -35,3 +35,8 @@ demo: ## Despliega la tienda con el chart oficial (idempotente)
 
 demo-down: ## Desinstala la tienda
 	helm uninstall otel-demo --namespace $(DEMO_NAMESPACE)
+
+policies-test: ## Comprueba las políticas y ejecuta sus tests
+	opa check --strict policies
+	opa fmt --fail --list policies
+	opa test policies

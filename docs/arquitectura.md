@@ -113,17 +113,21 @@ Entrada que el ejecutor envía a la política:
   "facts": {
     "deployment_exists": true,
     "previous_revision": 4,
-    "pods_waiting_reason": ["CrashLoopBackOff"],
+    "unhealthy_pods": 1,
     "actions_last_hour_on_target": 0
   }
 }
 ```
 
-`action` procede de la propuesta del agente; `facts` lo completa el ejecutor. Respuesta:
+`action` procede de la propuesta del agente; `facts` lo completa el ejecutor. `unhealthy_pods` cuenta los pods de la revisión actual que no están listos y acumulan reinicios: no depende del texto de estado, que alterna entre `Error` y `CrashLoopBackOff`. `set_memory_limit` usa además `oom_killed_recently` y `current_memory_limit_bytes`.
+
+Respuesta:
 
 ```json
 { "allow": false, "deny_reasons": ["target no permitido"] }
 ```
+
+La política está en `policies/remediation.rego` y se consulta en `POST /v1/data/autokub/remediation/decision`. `revert_drift` aún no está permitida, a la espera de ADR 0003.
 
 ## Trazabilidad del flujo
 

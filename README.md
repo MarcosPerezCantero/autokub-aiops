@@ -102,6 +102,7 @@ make status   # estado del clúster
 make stop     # para el clúster sin borrarlo (make up lo reanuda)
 make demo     # despliega la tienda (chart oficial + deploy/otel-demo/values.yaml) en http://localhost:8080
 make down     # destruye el clúster
+make policies-test  # comprueba las políticas Rego y ejecuta sus tests
 ```
 
 ## Hoja de ruta
