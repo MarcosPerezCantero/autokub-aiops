@@ -10,7 +10,7 @@ DEMO_VALUES := deploy/otel-demo/values.yaml
 # Python 3.12 para el venv del agente (en macOS: make venv PYTHON=python3.12)
 PYTHON ?= python3
 
-.PHONY: up stop down status demo demo-down test lint policies-test venv agent-test auth prototype prototype-llm
+.PHONY: up stop down status demo demo-down test lint chart-test chart-sync images policies-test venv agent-test auth prototype prototype-llm
 
 up: ## Crea el clúster (idempotente)
 	@if k3d cluster list $(CLUSTER) >/dev/null 2>&1; then \
@@ -39,13 +39,16 @@ demo: ## Despliega la tienda con el chart oficial (idempotente)
 demo-down: ## Desinstala la tienda
 	helm uninstall otel-demo --namespace $(DEMO_NAMESPACE)
 
-test: policies-test agent-test ## Todos los tests (sin clúster)
+test: policies-test agent-test chart-test ## Todos los tests (sin clúster)
 
 lint: ## Formato y errores de Rego y Python, y configuración del laboratorio
 	opa check --strict policies
 	opa fmt --fail --list policies
-	ruff check agent executor viewer infra
+	ruff check agent executor viewer infra charts
 	python3 infra/rbac.py config/lab.json > /dev/null
+	helm lint --quiet charts/autokub --set 'namespaces.ns.targets={a}'
+	@# La política del chart debe ser la del repositorio
+	cmp policies/remediation.rego charts/autokub/files/remediation.rego
 
 policies-test: ## Comprueba las políticas y ejecuta sus tests
 	opa check --strict policies
@@ -64,6 +67,16 @@ agent-test: ## Ejecuta los tests del ejecutor, del agente, de la vista y del RBA
 	cd agent && ../.venv/bin/python -m unittest
 	cd viewer && python3 -m unittest
 	cd infra && python3 -m unittest
+
+chart-test: ## Renderiza el chart y lo compara con el RBAC y la política del laboratorio
+	.venv/bin/python charts/test_chart.py
+
+chart-sync: ## Copia la política al chart
+	cp policies/remediation.rego charts/autokub/files/remediation.rego
+
+images: ## Construye las imágenes del agente y del ejecutor
+	docker build -f images/executor/Dockerfile -t ghcr.io/marcosperezcantero/autokub-executor:dev .
+	docker build -f images/agent/Dockerfile -t ghcr.io/marcosperezcantero/autokub-agent:dev .
 
 auth: ## Aplica el RBAC generado desde config/lab.json y crea los kubeconfig temporales (24 h)
 	./infra/service-accounts.sh

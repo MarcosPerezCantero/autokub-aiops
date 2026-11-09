@@ -1,0 +1,53 @@
+# Detector y agente: solo lectura. Una sola réplica, para no proponer dos veces la misma acción.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: autokub-agent
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels: {{- include "autokub.labels" . | nindent 8 }}
+        app.kubernetes.io/component: agent
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmaps.yaml") . | sha256sum }}
+    spec:
+      # Sin variables automáticas de los Services: AUTOKUB_EXECUTOR_PORT chocaría con la del ejecutor
+      enableServiceLinks: false
+      serviceAccountName: autokub-reader
+      {{- include "autokub.podSecurity" . | nindent 6 }}
+      containers:
+        - name: agent
+          image: {{ include "autokub.image" (dict "root" . "name" "agent") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: AUTOKUB_PROPOSER
+              value: {{ .Values.proposer }}
+            - name: AUTOKUB_EXECUTOR_URL
+              value: http://autokub-executor.{{ .Release.Namespace }}.svc:8090/actions
+            # La clave solo llega a este pod, que no tiene permisos de escritura
+            - name: {{ if eq .Values.model.provider "anthropic" }}ANTHROPIC_API_KEY{{ else }}AUTOKUB_LLM_API_KEY{{ end }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.model.apiKeySecret }}
+                  key: {{ .Values.model.apiKeySecretKey }}
+                  optional: true
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+          resources: {{- toYaml .Values.resources.agent | nindent 12 }}
+          {{- include "autokub.containerSecurity" . | nindent 10 }}
+      volumes:
+        - name: config
+          configMap:
+            name: autokub-config

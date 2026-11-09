@@ -1,0 +1,23 @@
+{{- if .Values.networkPolicy.enabled }}
+# Solo el pod del agente puede enviar propuestas al ejecutor
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: autokub-executor
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: executor
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: agent
+      ports:
+        - port: 8090
+{{- end }}

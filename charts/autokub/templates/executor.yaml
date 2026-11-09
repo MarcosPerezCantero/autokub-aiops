@@ -1,0 +1,83 @@
+# Ejecutor con OPA como sidecar: OPA solo escucha en localhost, así que solo el ejecutor lo consulta.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: autokub-executor
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+    app.kubernetes.io/component: executor
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: executor
+  template:
+    metadata:
+      labels: {{- include "autokub.labels" . | nindent 8 }}
+        app.kubernetes.io/component: executor
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmaps.yaml") . | sha256sum }}
+    spec:
+      # Sin variables automáticas de los Services: AUTOKUB_EXECUTOR_PORT chocaría con la del ejecutor
+      enableServiceLinks: false
+      serviceAccountName: autokub-executor
+      {{- include "autokub.podSecurity" . | nindent 6 }}
+      containers:
+        - name: executor
+          image: {{ include "autokub.image" (dict "root" . "name" "executor") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: AUTOKUB_EXECUTOR_PORT
+              value: "8090"
+          ports:
+            - name: http
+              containerPort: 8090
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+          resources: {{- toYaml .Values.resources.executor | nindent 12 }}
+          {{- include "autokub.containerSecurity" . | nindent 10 }}
+        - name: opa
+          image: {{ .Values.opa.image }}
+          args:
+            - run
+            - --server
+            - --addr=127.0.0.1:8181
+            - --log-level=error
+            - /policy/remediation.rego
+            - autokub.config:/config/config.json
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: policy
+              mountPath: /policy
+              readOnly: true
+          resources: {{- toYaml .Values.resources.opa | nindent 12 }}
+          {{- include "autokub.containerSecurity" . | nindent 10 }}
+      volumes:
+        - name: config
+          configMap:
+            name: autokub-config
+        - name: policy
+          configMap:
+            name: autokub-policy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: autokub-executor
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: executor
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http

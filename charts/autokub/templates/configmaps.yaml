@@ -1,0 +1,23 @@
+{{- include "autokub.validate" . }}
+{{- $model := dict "provider" .Values.model.provider "name" .Values.model.name "effort" .Values.model.effort }}
+{{- if .Values.model.base_url }}{{- $_ := set $model "base_url" .Values.model.base_url }}{{ end }}
+{{- $config := dict "mode" .Values.mode "namespaces" .Values.namespaces "limits" .Values.limits "detection" .Values.detection "model" $model }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: autokub-config
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+data:
+  config.json: {{ $config | toJson | quote }}
+---
+# La política es pública y auditable: es la misma que policies/remediation.rego del repositorio
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: autokub-policy
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+data:
+  remediation.rego: |-
+{{ .Files.Get "files/remediation.rego" | indent 4 }}

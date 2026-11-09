@@ -1,0 +1,57 @@
+# Configuración de autokub. Ver docs/despliegue.md.
+
+# propose (por defecto): detecta, propone y consulta a OPA, pero no modifica el clúster ni tiene
+# permisos para hacerlo. execute: aplica las acciones que OPA autoriza.
+mode: propose
+
+# Quién propone: llm (agente) o rules (reglas fijas, sin modelo; útil para probar sin clave)
+proposer: llm
+
+# Namespaces de la aplicación y Deployments sobre los que se puede actuar. Obligatorio.
+# namespaces:
+#   tienda:
+#     targets: [cart, checkout, payment]
+namespaces: {}
+
+limits:
+  max_actions_per_hour: 3        # por Deployment
+  max_memory_bytes: 536870912    # techo de set_memory_limit (512 Mi)
+
+detection:
+  poll_seconds: 5
+  min_restarts: 2
+  stable_seconds: 30
+  verify_timeout_seconds: 120
+  max_attempts: 2
+  clear_seconds: 60
+
+model:
+  provider: anthropic            # anthropic | openai (cualquier API compatible: LiteLLM, Ollama, vLLM…)
+  name: claude-opus-5-5
+  effort: medium                 # solo provider: anthropic
+  base_url: ""                   # obligatorio con provider: openai
+  apiKeySecret: autokub-llm      # Secret del namespace de autokub con la clave (opcional en modelos locales)
+  apiKeySecretKey: api-key
+
+image:
+  registry: ghcr.io/marcosperezcantero
+  tag: ""                        # por defecto, appVersion del chart
+  pullPolicy: IfNotPresent
+
+opa:
+  image: openpolicyagent/opa:1.22.0-static
+
+# El ejecutor solo acepta tráfico del pod del agente
+networkPolicy:
+  enabled: true
+
+resources:
+  agent:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 512Mi}
+  executor:
+    requests: {cpu: 20m, memory: 32Mi}
+    limits: {memory: 128Mi}
+  opa:
+    requests: {cpu: 20m, memory: 32Mi}
+    limits: {memory: 128Mi}

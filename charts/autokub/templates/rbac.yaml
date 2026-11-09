@@ -1,0 +1,82 @@
+{{- /*
+Mismo RBAC que genera infra/rbac.py para el laboratorio (un test comprueba que coinciden).
+Cuentas en el namespace de autokub; en cada namespace configurado, un Role por cuenta.
+El ejecutor solo tiene patch, y solo sobre sus targets, en modo execute.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: autokub-reader
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: autokub-executor
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+{{- range $namespace, $settings := .Values.namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: autokub-reader
+  namespace: {{ $namespace }}
+  labels: {{- include "autokub.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: autokub-reader
+  namespace: {{ $namespace }}
+  labels: {{- include "autokub.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: autokub-reader
+    namespace: {{ $.Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: autokub-reader
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: autokub-executor
+  namespace: {{ $namespace }}
+  labels: {{- include "autokub.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: {{ if eq $.Values.mode "execute" }}["get", "patch"]{{ else }}["get"]{{ end }}
+    resourceNames: {{ $settings.targets | sortAlpha | toJson }}
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: autokub-executor
+  namespace: {{ $namespace }}
+  labels: {{- include "autokub.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: autokub-executor
+    namespace: {{ $.Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: autokub-executor
+{{- end }}

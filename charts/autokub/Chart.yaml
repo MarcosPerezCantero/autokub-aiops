@@ -1,0 +1,10 @@
+apiVersion: v2
+name: autokub
+description: Remediación de incidentes en Kubernetes con un agente LLM que solo propone y una política OPA que autoriza cada acción
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/MarcosPerezCantero/autokub-aiops
+sources:
+  - https://github.com/MarcosPerezCantero/autokub-aiops
+keywords: [aiops, remediation, opa, llm, kubernetes]

@@ -1,0 +1,16 @@
+autokub {{ .Chart.AppVersion }} instalado en modo {{ .Values.mode }}.
+{{- if eq .Values.mode "propose" }}
+
+Modo propuesta: detecta y propone, pero no modifica el clúster (no tiene permisos para hacerlo).
+Para ver qué haría:
+  kubectl -n {{ .Release.Namespace }} logs deploy/autokub-executor -c executor -f | grep action_would_execute
+{{- else }}
+
+Modo ejecución: aplica las acciones que OPA autoriza sobre:
+{{- range $namespace, $settings := .Values.namespaces }}
+  {{ $namespace }}: {{ join ", " $settings.targets }}
+{{- end }}
+{{- end }}
+
+Eventos del detector y del agente:
+  kubectl -n {{ .Release.Namespace }} logs deploy/autokub-agent -f

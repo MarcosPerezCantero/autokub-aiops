@@ -4,7 +4,16 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from executor import HISTORY_ANNOTATION, Executor, KubectlError, ask_opa, load_mode, parse_memory, validate
+from executor import (
+    HISTORY_ANNOTATION,
+    Executor,
+    KubectlError,
+    ask_opa,
+    kubeconfig_args,
+    load_mode,
+    parse_memory,
+    validate,
+)
 
 UNDO = {"type": "rollout_undo", "namespace": "otel-demo", "target": "cart", "params": {}}
 ALLOW = {"allow": True, "deny_reasons": []}
@@ -356,6 +365,10 @@ class HelpersTest(unittest.TestCase):
         self.assertEqual(parse_memory("1000"), 1000)
         self.assertIsNone(parse_memory("1.5Gi"))
         self.assertIsNone(parse_memory("10Xi"))
+
+    def test_in_cluster_uses_pod_identity(self):
+        self.assertEqual(kubeconfig_args(""), [])
+        self.assertEqual(kubeconfig_args(".local/x"), ["--kubeconfig", ".local/x"])
 
     def test_escalate_is_valid_without_target(self):
         self.assertIsNone(validate({"action": {"type": "escalate"}}))

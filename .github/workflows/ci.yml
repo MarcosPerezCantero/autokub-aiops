@@ -24,6 +24,10 @@ jobs:
         with:
           version: 1.22.0
 
+      - uses: azure/setup-helm@v5.0.1
+        with:
+          version: v4.3.1
+
       - name: Herramientas
         run: pip install ruff==0.17.4
 

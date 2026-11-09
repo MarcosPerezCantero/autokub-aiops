@@ -106,7 +106,9 @@ TOOLS = [
 
 
 def kubectl(namespace, *args):
-    command = ["kubectl", "--kubeconfig", KUBECONFIG, "-n", namespace, *args]
+    # Sin kubeconfig (en un pod), kubectl usa la ServiceAccount del pod
+    kubeconfig = ["--kubeconfig", KUBECONFIG] if KUBECONFIG else []
+    command = ["kubectl", *kubeconfig, "-n", namespace, *args]
     result = subprocess.run(command, capture_output=True, text=True, timeout=30)
     return result.stdout if result.returncode == 0 else f"error: {result.stderr.strip()[:300]}"
 

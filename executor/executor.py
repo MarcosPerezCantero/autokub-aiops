@@ -23,7 +23,8 @@ KUBECONFIG = os.environ.get("AUTOKUB_KUBECONFIG", ".local/executor.kubeconfig")
 CONFIG_FILE = os.environ.get("AUTOKUB_CONFIG", "config/lab.json")
 # propose: consulta a OPA y registra qué haría, sin modificar el clúster. Es el modo por defecto.
 MODES = ("propose", "execute")
-ADDRESS = ("127.0.0.1", int(os.environ.get("AUTOKUB_EXECUTOR_PORT", "8090")))
+# En el clúster escucha en la red del pod (0.0.0.0); una NetworkPolicy limita quién le llega
+ADDRESS = (os.environ.get("AUTOKUB_EXECUTOR_HOST", "127.0.0.1"), int(os.environ.get("AUTOKUB_EXECUTOR_PORT", "8090")))
 
 MAX_BODY_BYTES = 16384
 K8S_NAME = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
@@ -49,8 +50,13 @@ def load_mode(path=CONFIG_FILE):
     return mode
 
 
+def kubeconfig_args(path=KUBECONFIG):
+    """Sin kubeconfig (en un pod), kubectl usa la ServiceAccount del pod."""
+    return ["--kubeconfig", path] if path else []
+
+
 def run_kubectl(namespace, *args, payload=None):
-    command = ["kubectl", "--kubeconfig", KUBECONFIG, "-n", namespace, *args]
+    command = ["kubectl", *kubeconfig_args(), "-n", namespace, *args]
     try:
         result = subprocess.run(command, capture_output=True, text=True, input=payload, timeout=30)
     except subprocess.TimeoutExpired as error:

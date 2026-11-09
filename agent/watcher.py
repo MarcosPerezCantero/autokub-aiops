@@ -55,7 +55,9 @@ def load_config(path=CONFIG_FILE):
 
 
 def get_json(namespace, resource):
-    command = ["kubectl", "--kubeconfig", KUBECONFIG, "-n", namespace, "get", resource, "-o", "json"]
+    # Sin kubeconfig (en un pod), kubectl usa la ServiceAccount del pod
+    kubeconfig = ["--kubeconfig", KUBECONFIG] if KUBECONFIG else []
+    command = ["kubectl", *kubeconfig, "-n", namespace, "get", resource, "-o", "json"]
     return json.loads(subprocess.run(command, capture_output=True, text=True, timeout=30, check=True).stdout)
 
 
