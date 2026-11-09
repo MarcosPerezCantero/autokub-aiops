@@ -15,26 +15,45 @@ from datetime import datetime, timezone
 
 import rules
 
-NAMESPACE = "otel-demo"
+CONFIG_FILE = os.environ.get("AUTOKUB_CONFIG", "config/lab.json")
 EVENTS_FILE = os.environ.get("AUTOKUB_EVENTS", ".local/events.jsonl")
 KUBECONFIG = os.environ.get("AUTOKUB_READER_KUBECONFIG", ".local/reader.kubeconfig")
 EXECUTOR_URL = os.environ.get("AUTOKUB_EXECUTOR_URL", "http://127.0.0.1:8090/actions")
-POLL_SECONDS = 5
-# Un reinicio aislado puede ser transitorio y Kubernetes ya lo gestiona
-MIN_RESTARTS = 2
-# Sin readiness probes, un pod defectuoso parece listo un instante: hay que exigir estabilidad
-STABLE_SECONDS = 30
-VERIFY_TIMEOUT_SECONDS = 120
-MAX_ATTEMPTS = 2
-# Un incidente escalado sigue abierto hasta que el fallo lleva este tiempo sin aparecer
-CLEAR_SECONDS = 60
+
+# Valores por defecto de la detección; la configuración (sección "detection") puede cambiarlos
+DETECTION = {
+    "poll_seconds": 5,
+    # Un reinicio aislado puede ser transitorio y Kubernetes ya lo gestiona
+    "min_restarts": 2,
+    # Sin readiness probes, un pod defectuoso parece listo un instante: hay que exigir estabilidad
+    "stable_seconds": 30,
+    "verify_timeout_seconds": 120,
+    "max_attempts": 2,
+    # Un incidente escalado sigue abierto hasta que el fallo lleva este tiempo sin aparecer
+    "clear_seconds": 60,
+}
 REVISION_ANNOTATION = "deployment.kubernetes.io/revision"
 
 PENDING, VERIFYING, ESCALATED = "pending", "verifying", "escalated"
 
 
-def get_json(resource):
-    command = ["kubectl", "--kubeconfig", KUBECONFIG, "-n", NAMESPACE, "get", resource, "-o", "json"]
+def load_config(path=CONFIG_FILE):
+    """Lee los namespaces a vigilar y los parámetros de detección. Falla si la configuración no sirve."""
+    with open(path, encoding="utf-8") as file:
+        config = json.load(file)
+    namespaces = config.get("namespaces")
+    if not isinstance(namespaces, dict) or not namespaces:
+        raise ValueError("la configuración no define namespaces")
+    detection = {**DETECTION, **config.get("detection", {})}
+    if set(detection) != set(DETECTION) or not all(
+        isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in detection.values()
+    ):
+        raise ValueError("sección detection no válida")
+    return sorted(namespaces), detection
+
+
+def get_json(namespace, resource):
+    command = ["kubectl", "--kubeconfig", KUBECONFIG, "-n", namespace, "get", resource, "-o", "json"]
     return json.loads(subprocess.run(command, capture_output=True, text=True, timeout=30, check=True).stdout)
 
 
@@ -51,7 +70,7 @@ def post_action(payload):
         return {"status": "unreachable"}
 
 
-def find_incidents(pods, replica_sets):
+def find_incidents(pods, replica_sets, namespace, min_restarts=DETECTION["min_restarts"]):
     """Devuelve un incidente por cada Deployment con pods que fallan de forma repetida.
 
     Se usan los reinicios y no el texto de estado, que alterna entre Error y CrashLoopBackOff.
@@ -66,13 +85,13 @@ def find_incidents(pods, replica_sets):
     incidents = {}
     for pod in pods:
         statuses = pod.get("status", {}).get("containerStatuses", [])
-        failing = [s for s in statuses if not s.get("ready") and s.get("restartCount", 0) >= MIN_RESTARTS]
+        failing = [s for s in statuses if not s.get("ready") and s.get("restartCount", 0) >= min_restarts]
         pod_owners = [o.get("name") for o in pod["metadata"].get("ownerReferences", [])]
         replica_set = next((name for name in pod_owners if name in owners), None)
         if failing and replica_set and owners[replica_set] not in incidents:
             terminated = failing[0].get("lastState", {}).get("terminated", {})
             incidents[owners[replica_set]] = {
-                "namespace": NAMESPACE,
+                "namespace": namespace,
                 "deployment": owners[replica_set],
                 "replica_set": replica_set,
                 "pod": pod["metadata"]["name"],
@@ -120,11 +139,15 @@ def deployment_health(deployment, replica_sets, pods):
 
 
 class Watcher:
-    def __init__(self, propose=rules.propose, send=post_action, events_file=EVENTS_FILE, clock=time.monotonic):
+    def __init__(
+        self, propose=rules.propose, send=post_action, events_file=EVENTS_FILE, clock=time.monotonic, detection=None
+    ):
         self.propose = propose
         self.send = send
         self.events_file = events_file
         self.clock = clock
+        self.detection = {**DETECTION, **(detection or {})}
+        # Incidentes abiertos, por namespace y Deployment
         self.active = {}
 
     def emit(self, incident_id, event, summary, component="detector", **data):
@@ -136,30 +159,35 @@ class Watcher:
             "summary": str(summary)[:2000],
             "data": data,
         }
-        os.makedirs(os.path.dirname(self.events_file) or ".", exist_ok=True)
-        with open(self.events_file, "a", encoding="utf-8") as events:
-            events.write(json.dumps(record, ensure_ascii=False) + "\n")
-        print(json.dumps(record, ensure_ascii=False), flush=True)
+        line = json.dumps(record, ensure_ascii=False)
+        if self.events_file:  # En el clúster no hay fichero compartido: basta la salida estándar
+            os.makedirs(os.path.dirname(self.events_file) or ".", exist_ok=True)
+            with open(self.events_file, "a", encoding="utf-8") as events:
+                events.write(line + "\n")
+        print(line, flush=True)
 
-    def tick(self, pods, replica_sets, deployments):
-        incidents = find_incidents(pods, replica_sets)
+    def tick(self, pods, replica_sets, deployments, namespace):
+        """Procesa una lectura de un namespace. Cada namespace se trata por separado."""
+        incidents = find_incidents(pods, replica_sets, namespace, self.detection["min_restarts"])
         by_name = {deployment["metadata"]["name"]: deployment for deployment in deployments}
 
-        for name, state in list(self.active.items()):
+        for (state_namespace, name), state in list(self.active.items()):
+            if state_namespace != namespace:
+                continue
             if state["phase"] == VERIFYING and name in by_name:
                 self.verify(name, state, by_name[name], replica_sets, pods, incidents.get(name))
             elif state["phase"] == ESCALATED:
                 if name in incidents:
                     state["last_seen"] = self.clock()
-                elif self.clock() - state["last_seen"] >= CLEAR_SECONDS:
-                    del self.active[name]
+                elif self.clock() - state["last_seen"] >= self.detection["clear_seconds"]:
+                    del self.active[(namespace, name)]
                     self.emit(state["id"], "incident_closed", "escalado; sin fallos desde entonces", deployment=name)
 
         for name, incident in incidents.items():
-            state = self.active.get(name)
+            state = self.active.get((namespace, name))
             if state is None:
-                state = {"id": f"inc-{uuid.uuid4().hex[:8]}", "phase": PENDING, "attempts": []}
-                self.active[name] = state
+                state = {"id": f"inc-{uuid.uuid4().hex[:8]}", "phase": PENDING, "attempts": [], "namespace": namespace}
+                self.active[(namespace, name)] = state
                 self.emit(state["id"], "incident_detected", name, **incident)
             if state["phase"] == PENDING:
                 self.remediate(state, incident)
@@ -191,20 +219,20 @@ class Watcher:
         if healthy and restarts == state["restarts"]:
             if state["healthy_since"] is None:
                 state["healthy_since"] = now
-            if now - state["healthy_since"] >= STABLE_SECONDS:
+            if now - state["healthy_since"] >= self.detection["stable_seconds"]:
                 self.emit(state["id"], "verification_passed", f"{name} estable", deployment=name)
                 self.emit(state["id"], "incident_closed", "recuperación verificada", deployment=name)
-                del self.active[name]
+                del self.active[(state["namespace"], name)]
                 return
         else:
             state["healthy_since"] = None
         state["restarts"] = restarts
 
-        if now - state["started"] < VERIFY_TIMEOUT_SECONDS:
+        if now - state["started"] < self.detection["verify_timeout_seconds"]:
             return
         self.emit(state["id"], "verification_failed", f"{name} sigue sin recuperarse", deployment=name)
         current = incident or state["incident"]
-        if len(state["attempts"]) < MAX_ATTEMPTS:
+        if len(state["attempts"]) < self.detection["max_attempts"]:
             state["phase"] = PENDING
             self.remediate(state, current)
         else:
@@ -212,18 +240,26 @@ class Watcher:
 
 
 def main():
-    watcher = Watcher()
+    namespaces, detection = load_config()
+    watcher = Watcher(detection=detection)
     if os.environ.get("AUTOKUB_PROPOSER") == "llm":
         import llm_agent
 
         watcher.propose = lambda incident: llm_agent.propose(incident, emit=watcher.emit)
-    print(f"Detector en marcha (proponedor: {os.environ.get('AUTOKUB_PROPOSER', 'rules')})", flush=True)
+    proposer = os.environ.get("AUTOKUB_PROPOSER", "rules")
+    print(f"Detector en marcha (proponedor: {proposer}; namespaces: {', '.join(namespaces)})", flush=True)
     while True:
-        try:
-            watcher.tick(get_json("pods")["items"], get_json("replicasets")["items"], get_json("deployments")["items"])
-        except (subprocess.SubprocessError, ValueError) as error:
-            print(f"Error al leer el clúster: {error}", flush=True)
-        time.sleep(POLL_SECONDS)
+        for namespace in namespaces:
+            try:
+                watcher.tick(
+                    get_json(namespace, "pods")["items"],
+                    get_json(namespace, "replicasets")["items"],
+                    get_json(namespace, "deployments")["items"],
+                    namespace,
+                )
+            except (subprocess.SubprocessError, ValueError) as error:
+                print(f"Error al leer el namespace {namespace}: {error}", flush=True)
+        time.sleep(detection["poll_seconds"])
 
 
 if __name__ == "__main__":

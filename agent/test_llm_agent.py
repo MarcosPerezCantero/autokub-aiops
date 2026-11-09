@@ -52,9 +52,13 @@ class ProposeTest(unittest.TestCase):
     def emit(self, incident_id, event, summary, **data):
         self.emitted.append((event, summary, data))
 
-    def run_agent(self, replies):
+    def run_agent(self, replies, incident=INCIDENT):
         client = FakeClient(replies)
-        return propose(INCIDENT, emit=self.emit, client=client), client
+        return propose(incident, emit=self.emit, client=client), client
+
+    def test_action_uses_incident_namespace(self):
+        action, _ = self.run_agent([reply([UNDO])], incident={**INCIDENT, "namespace": "tienda"})
+        self.assertEqual(action["namespace"], "tienda")
 
     def test_direct_proposal(self):
         action, _ = self.run_agent([reply([UNDO])])
@@ -67,7 +71,7 @@ class ProposeTest(unittest.TestCase):
     def test_reads_then_proposes_and_sums_usage(self):
         with mock.patch.object(llm_agent, "run_tool", return_value="datos") as tool:
             action, client = self.run_agent([reply([tool_call("list_pods", {})]), reply([UNDO])])
-        tool.assert_called_once_with("list_pods", {})
+        tool.assert_called_once_with("list_pods", {}, "otel-demo")
         self.assertEqual(action["type"], "rollout_undo")
         self.assertEqual(self.emitted[-1][2]["steps"], 2)
         self.assertEqual(self.emitted[-1][2]["input_tokens"], 200)
@@ -83,10 +87,10 @@ class ProposeTest(unittest.TestCase):
 
     def test_namespace_is_not_chosen_by_model(self):
         proposal = {"type": "rollout_undo", "target": "cart", "namespace": "kube-system", "memory_bytes": None}
-        self.assertEqual(to_action(proposal)["namespace"], "otel-demo")
+        self.assertEqual(to_action(proposal, "otel-demo")["namespace"], "otel-demo")
 
     def test_memory_proposal(self):
-        action = to_action({"type": "set_memory_limit", "target": "email", "memory_bytes": 5, "reason": "x"})
+        action = to_action({"type": "set_memory_limit", "target": "email", "memory_bytes": 5, "reason": "x"}, "otel-demo")
         self.assertEqual(action["params"], {"memory_bytes": 5})
 
     def test_model_can_escalate(self):
@@ -150,11 +154,21 @@ class ToolsTest(unittest.TestCase):
                 ("get_pod_events", {"pod": "a,involvedObject.kind=Secret"}),
                 ("get_deployment_revisions", {"deployment": "A B"}),
             ):
-                self.assertTrue(run_tool(name, args).startswith("error"))
+                self.assertTrue(run_tool(name, args, "otel-demo").startswith("error"))
             kubectl.assert_not_called()
 
     def test_unknown_tool(self):
-        self.assertTrue(run_tool("get_secret", {}).startswith("error"))
+        self.assertTrue(run_tool("get_secret", {}, "otel-demo").startswith("error"))
+
+    def test_tools_read_the_incident_namespace(self):
+        with mock.patch.object(llm_agent, "kubectl", return_value='{"items": []}') as kubectl:
+            run_tool("list_pods", {}, "tienda")
+        self.assertEqual(kubectl.call_args.args[0], "tienda")
+
+    def test_invalid_namespace_never_reaches_kubectl(self):
+        with mock.patch.object(llm_agent, "kubectl") as kubectl:
+            self.assertTrue(run_tool("list_pods", {}, "--all-namespaces").startswith("error"))
+        kubectl.assert_not_called()
 
 
 if __name__ == "__main__":

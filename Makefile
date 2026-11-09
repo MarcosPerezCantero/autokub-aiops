@@ -41,26 +41,31 @@ demo-down: ## Desinstala la tienda
 
 test: policies-test agent-test ## Todos los tests (sin clúster)
 
-lint: ## Formato y errores de Rego y Python
+lint: ## Formato y errores de Rego y Python, y configuración del laboratorio
 	opa check --strict policies
 	opa fmt --fail --list policies
-	ruff check agent executor viewer
+	ruff check agent executor viewer infra
+	python3 infra/rbac.py config/lab.json > /dev/null
 
 policies-test: ## Comprueba las políticas y ejecuta sus tests
 	opa check --strict policies
 	opa fmt --fail --list policies
 	opa test policies
+	@# La política con el fichero de configuración real del laboratorio: falla si no autoriza
+	opa eval --fail-defined -f raw -d policies/remediation.rego -d autokub.config:config/lab.json \
+		-i config/testdata/undo-product-catalog.json 'not data.autokub.remediation.decision.allow' > /dev/null
 
 venv: ## Crea el entorno de Python del agente con versiones fijadas
 	$(PYTHON) -m venv .venv
 	.venv/bin/pip install --quiet --require-virtualenv -r agent/requirements.lock
 
-agent-test: ## Ejecuta los tests del ejecutor y del agente
+agent-test: ## Ejecuta los tests del ejecutor, del agente, de la vista y del RBAC
 	cd executor && python3 -m unittest
 	cd agent && ../.venv/bin/python -m unittest
 	cd viewer && python3 -m unittest
+	cd infra && python3 -m unittest
 
-auth: ## Aplica el RBAC y genera los kubeconfig temporales (24 h)
+auth: ## Aplica el RBAC generado desde config/lab.json y crea los kubeconfig temporales (24 h)
 	./infra/service-accounts.sh
 
 prototype: ## Arranca la cadena con reglas fijas (Ctrl+C para detener)

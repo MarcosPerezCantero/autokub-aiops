@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# Aplica el RBAC del lector y del ejecutor y genera un kubeconfig con token temporal para cada uno.
-# Los ficheros quedan en .local/ (fuera de Git).
+# Aplica el RBAC del lector y del ejecutor, generado desde la configuración, y crea un
+# kubeconfig con token temporal para cada uno. Los ficheros quedan en .local/ (fuera de Git).
 #
-# Uso: ./infra/service-accounts.sh
+# Uso: ./infra/service-accounts.sh [config/lab.json]
 set -euo pipefail
 
-NAMESPACE=otel-demo
+CONFIG=${1:-${AUTOKUB_CONFIG:-config/lab.json}}
+SYSTEM_NAMESPACE=autokub-system
+
+python3 infra/rbac.py "$CONFIG" | kubectl apply -f -
 
 generate() {
-  local account=$1 rbac=$2 destination=$3 server ca token
-  kubectl apply -f "$rbac"
+  local account=$1 destination=$2 server ca token
   server=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
   ca=$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
-  token=$(kubectl -n "$NAMESPACE" create token "$account" --duration=24h)
+  token=$(kubectl -n "$SYSTEM_NAMESPACE" create token "$account" --duration=24h)
   cat > "$destination" <<KUBECONFIG
 apiVersion: v1
 kind: Config
@@ -30,7 +32,6 @@ contexts:
     context:
       cluster: autokub
       user: $account
-      namespace: $NAMESPACE
 current-context: $account
 KUBECONFIG
   echo "Kubeconfig de $account en $destination (válido 24 h)"
@@ -38,5 +39,5 @@ KUBECONFIG
 
 umask 077
 mkdir -p .local
-generate autokub-reader deploy/agent/rbac.yaml .local/reader.kubeconfig
-generate autokub-executor deploy/executor/rbac.yaml .local/executor.kubeconfig
+generate autokub-reader .local/reader.kubeconfig
+generate autokub-executor .local/executor.kubeconfig

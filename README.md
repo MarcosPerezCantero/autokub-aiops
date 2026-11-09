@@ -70,7 +70,8 @@ El sistema opera sobre un fork de la [OpenTelemetry Demo](https://github.com/ope
 
 ```
 autokub-aiops/
-├── infra/       # bootstrap del entorno, configuración de k3d, values de Helm
+├── config/      # configuración: namespaces, servicios permitidos y límites
+├── infra/       # bootstrap del entorno, configuración de k3d, generación del RBAC
 ├── deploy/      # manifiestos propios y values del chart (fuente de Argo CD)
 ├── agent/       # agente LangGraph
 ├── policies/    # políticas Rego y sus tests
@@ -128,7 +129,7 @@ make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthr
 - [x] Despliegue del producto en Kubernetes con el chart oficial
 - [x] Prototipo vertical: un incidente de extremo a extremo (detección → agente → OPA → ejecución → verificación)
 - [ ] **Versión 0.1 instalable**: CrashLoopBackOff en cualquier clúster ([ADR 0006](docs/adr/0006-producto-instalable.md))
-  - [ ] Configuración en un fichero (namespace, servicios permitidos, límites), sin datos de la demo en el código
+  - [x] Configuración en un fichero (namespaces, servicios permitidos, límites), sin datos de la demo en el código
   - [ ] Modo solo propuesta por defecto: muestra la acción y la decisión de OPA sin ejecutarla
   - [ ] Modelo intercambiable vía LiteLLM
   - [ ] Chart de Helm e imágenes en GHCR; agente, ejecutor y OPA como pods

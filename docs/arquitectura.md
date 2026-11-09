@@ -88,12 +88,12 @@ La verificación es de solo lectura, por lo que la hace el detector. Un desplieg
 | Mecanismo | Qué garantiza |
 |-----------|---------------|
 | Credenciales separadas | El agente solo lee; el ejecutor es el único que escribe |
-| RBAC del ejecutor | Limitado al namespace `otel-demo` y a los Deployments permitidos, sin Secrets |
+| RBAC del ejecutor | Limitado a los namespaces configurados y a sus Deployments permitidos, sin Secrets; se genera desde la misma configuración que lee OPA |
 | Operaciones fijas | El ejecutor implementa cada acción del catálogo; nunca ejecuta texto generado por el modelo |
 | Validación de esquema | Una salida malformada del modelo se rechaza antes de llegar a OPA |
 | Hechos obtenidos por el ejecutor | La política evalúa datos leídos del clúster, no lo que el modelo afirma |
 | Denegación por defecto | Si OPA no responde o no hay regla, la acción no se ejecuta (*fail-closed*) |
-| Límite de frecuencia | Corta los bucles de remediación |
+| Límite de frecuencia | Corta los bucles de remediación. El historial vive en el Deployment y sobrevive a reinicios del ejecutor |
 | Registro de auditoría | Cada propuesta y decisión queda registrada, también las bloqueadas |
 
 RBAC y OPA son capas complementarias: RBAC no distingue, por ejemplo, un cambio de memoria razonable de uno excesivo; OPA sí. Y si la política tuviera un error, RBAC sigue acotando el daño posible.
@@ -123,7 +123,7 @@ Entrada que el ejecutor envía a la política:
 }
 ```
 
-`action` procede de la propuesta del agente; `facts` lo completa el ejecutor. `unhealthy_pods` cuenta los pods de la revisión actual que no están listos y acumulan reinicios: no depende del texto de estado, que alterna entre `Error` y `CrashLoopBackOff`. `set_memory_limit` usa además `oom_killed_recently` y `current_memory_limit_bytes`.
+`action` procede de la propuesta del agente; `facts` lo completa el ejecutor. `unhealthy_pods` cuenta los pods de la revisión actual que no están listos y acumulan reinicios: no depende del texto de estado, que alterna entre `Error` y `CrashLoopBackOff`. `set_memory_limit` usa además `oom_killed_recently`, `current_memory_limit_bytes` y `target_container`: el contenedor sobre el que actuar, que es el único del pod o el que falla, sin suponer que se llame como el Deployment.
 
 Respuesta:
 
@@ -131,7 +131,7 @@ Respuesta:
 { "allow": false, "deny_reasons": ["target no permitido"] }
 ```
 
-La política está en `policies/remediation.rego` y se consulta en `POST /v1/data/autokub/remediation/decision`. `revert_drift` aún no está permitida, a la espera de ADR 0003.
+La política está en `policies/remediation.rego` y se consulta en `POST /v1/data/autokub/remediation/decision`. No contiene listas fijas: los namespaces, los servicios permitidos y los límites los recibe como datos en `data.autokub.config` (en el laboratorio, `config/lab.json`). Sin esos datos, deniega toda acción que modifique el clúster. `revert_drift` aún no está permitida, a la espera de ADR 0003.
 
 ## Trazabilidad del flujo
 

@@ -6,27 +6,10 @@
 # Así, un dato ausente o de tipo inesperado deniega la acción en lugar de permitirla.
 package autokub.remediation
 
-namespace := "otel-demo"
-
-# Servicios de la aplicación. Quedan fuera flagd, el Collector, los almacenes de datos,
-# la observabilidad, el proxy de entrada y el generador de carga.
-allowed_targets := {
-	"ad",
-	"cart",
-	"checkout",
-	"currency",
-	"email",
-	"frontend",
-	"payment",
-	"product-catalog",
-	"quote",
-	"recommendation",
-	"shipping",
-}
-
-max_actions_per_hour := 3
-
-max_memory_bytes := 536870912 # 512 Mi
+# Configuración de la instalación: namespaces, servicios permitidos y límites.
+# Se carga como datos en data.autokub.config (ver config/lab.json y docs/despliegue.md).
+# Si falta, ninguna acción que modifique el clúster se autoriza.
+config := data.autokub.config
 
 # Parámetros exactos de cada acción que modifica el clúster
 mutating_actions := {
@@ -108,9 +91,17 @@ deny_reasons contains "límite de memoria no válido" if {
 
 mutating_action if mutating_actions[input.action.type]
 
-namespace_ok if input.action.namespace == namespace
+namespace_ok if {
+	is_string(input.action.namespace)
+	is_object(config.namespaces[input.action.namespace])
+}
 
-target_ok if input.action.target in allowed_targets
+target_ok if {
+	targets := config.namespaces[input.action.namespace].targets
+	is_array(targets)
+	is_string(input.action.target)
+	input.action.target in targets
+}
 
 deployment_ok if input.facts.deployment_exists == true
 
@@ -124,7 +115,8 @@ rate_ok if {
 	actions := input.facts.actions_last_hour_on_target
 	is_number(actions)
 	actions >= 0
-	actions < max_actions_per_hour
+	is_number(config.limits.max_actions_per_hour)
+	actions < config.limits.max_actions_per_hour
 }
 
 unhealthy_ok if {
@@ -146,5 +138,6 @@ memory_ok if {
 	current > 0
 	requested > current
 	requested <= 2 * current
-	requested <= max_memory_bytes
+	is_number(config.limits.max_memory_bytes)
+	requested <= config.limits.max_memory_bytes
 }

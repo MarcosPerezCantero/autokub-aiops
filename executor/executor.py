@@ -27,6 +27,10 @@ K8S_NAME = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
 INCIDENT_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 MEMORY_UNITS = {"Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "k": 10**3, "M": 10**6, "G": 10**9}
 REVISION_ANNOTATION = "deployment.kubernetes.io/revision"
+# Historial de acciones del ejecutor sobre cada Deployment, para el límite de frecuencia.
+# Vive en el propio Deployment para sobrevivir a reinicios del ejecutor (docs/despliegue.md).
+HISTORY_ANNOTATION = "autokub.io/action-history"
+HISTORY_WINDOW = timedelta(hours=1)
 
 
 class KubectlError(Exception):
@@ -106,32 +110,41 @@ class Executor:
             "summary": str(summary)[:500],
             "data": data,
         }
-        os.makedirs(os.path.dirname(self.events_file) or ".", exist_ok=True)
-        with open(self.events_file, "a", encoding="utf-8") as events:
-            events.write(json.dumps(record, ensure_ascii=False) + "\n")
-        print(json.dumps(record, ensure_ascii=False), flush=True)
+        line = json.dumps(record, ensure_ascii=False)
+        if self.events_file:  # En el clúster no hay fichero compartido: basta la salida estándar
+            os.makedirs(os.path.dirname(self.events_file) or ".", exist_ok=True)
+            with open(self.events_file, "a", encoding="utf-8") as events:
+                events.write(line + "\n")
+        print(line, flush=True)
 
-    def actions_last_hour(self, target):
-        limit = datetime.now(timezone.utc) - timedelta(hours=1)
+    @staticmethod
+    def recent_history(deployment, now):
+        """Marcas de tiempo de la última hora. None si la anotación no se puede interpretar."""
+        raw = deployment["metadata"].get("annotations", {}).get(HISTORY_ANNOTATION)
+        if raw is None:
+            return []
         try:
-            with open(self.events_file, encoding="utf-8") as events:
-                records = [json.loads(line) for line in events if line.strip()]
-        except FileNotFoundError:
-            return 0
-        return sum(
-            1
-            for record in records
-            if record["event"] == "action_executed"
-            and record["data"].get("target") == target
-            and datetime.fromisoformat(record["timestamp"]) > limit
-        )
+            values = json.loads(raw)
+            if not isinstance(values, list):
+                return None
+            stamps = [datetime.fromisoformat(stamp) for stamp in values]
+        except (TypeError, ValueError):
+            return None
+        if any(stamp.tzinfo is None for stamp in stamps):
+            return None
+        return [stamp for stamp in stamps if now - stamp < HISTORY_WINDOW]
+
+    def record_action(self, namespace, target, history, now):
+        stamps = [stamp.isoformat(timespec="seconds") for stamp in [*history, now]]
+        value = json.dumps(stamps, separators=(",", ":"))
+        self.kubectl(namespace, "annotate", f"deployment/{target}", f"{HISTORY_ANNOTATION}={value}", "--overwrite")
 
     def get_json(self, namespace, *args):
         return json.loads(self.kubectl(namespace, "get", *args, "-o", "json"))
 
     def collect_facts(self, namespace, target):
         """Hechos leídos del clúster: la política no se apoya en lo que afirme el modelo."""
-        facts = {"deployment_exists": False, "actions_last_hour_on_target": self.actions_last_hour(target)}
+        facts = {"deployment_exists": False, "actions_last_hour_on_target": None}
         try:
             deployment = self.get_json(namespace, "deployment", target)
             selector = ",".join(f"{k}={v}" for k, v in deployment["spec"]["selector"]["matchLabels"].items())
@@ -149,31 +162,56 @@ class Executor:
                 revisions[number] = replica_set["metadata"]["name"]
 
         current_replica_set = revisions.get(revision)
+        containers = deployment["spec"]["template"]["spec"]["containers"]
+        container = self.target_container(containers, pods, current_replica_set)
         unhealthy = 0
         oom_killed = False
         for pod in pods:
             statuses = pod.get("status", {}).get("containerStatuses", [])
             owners = [owner.get("name") for owner in pod["metadata"].get("ownerReferences", [])]
-            if current_replica_set in owners and any(
-                not status.get("ready") and status.get("restartCount", 0) > 0 for status in statuses
-            ):
+            if current_replica_set not in owners:
+                continue  # Los pods de revisiones anteriores no justifican actuar
+            if any(not status.get("ready") and status.get("restartCount", 0) > 0 for status in statuses):
                 unhealthy += 1
             for status in statuses:
-                if status.get("lastState", {}).get("terminated", {}).get("reason") == "OOMKilled":
+                # Solo el OOM del contenedor sobre el que se actuaría, no el de un sidecar
+                if (
+                    container
+                    and status.get("name") == container["name"]
+                    and status.get("lastState", {}).get("terminated", {}).get("reason") == "OOMKilled"
+                ):
                     oom_killed = True
 
-        container = next(
-            (c for c in deployment["spec"]["template"]["spec"]["containers"] if c["name"] == target), {}
-        )
-        limit = container.get("resources", {}).get("limits", {}).get("memory")
+        limit = container.get("resources", {}).get("limits", {}).get("memory") if container else None
+        history = self.recent_history(deployment, datetime.now(timezone.utc))
         facts.update(
             deployment_exists=True,
+            actions_last_hour_on_target=None if history is None else len(history),
+            target_container=container["name"] if container else None,
             previous_revision=max((number for number in revisions if number < revision), default=0),
             unhealthy_pods=unhealthy,
             oom_killed_recently=oom_killed,
             current_memory_limit_bytes=parse_memory(limit) if limit else None,
         )
         return facts
+
+    @staticmethod
+    def target_container(containers, pods, current_replica_set):
+        """Contenedor sobre el que actuar: el único del pod o, si hay varios, el que falla.
+
+        No se supone que se llame como el Deployment. Si no se puede determinar, None.
+        """
+        if len(containers) == 1:
+            return containers[0]
+        failing = {
+            status.get("name")
+            for pod in pods
+            if current_replica_set in [owner.get("name") for owner in pod["metadata"].get("ownerReferences", [])]
+            for status in pod.get("status", {}).get("containerStatuses", [])
+            if not status.get("ready") and status.get("restartCount", 0) > 0
+        }
+        candidates = [container for container in containers if container["name"] in failing]
+        return candidates[0] if len(candidates) == 1 else None
 
     def apply(self, action, facts):
         namespace, target = action["namespace"], action["target"]
@@ -185,8 +223,10 @@ class Executor:
         elif action["type"] == "rollout_restart":
             self.kubectl(namespace, "rollout", "restart", resource)
         elif action["type"] == "set_memory_limit":
+            if not facts.get("target_container"):
+                raise KubectlError("no se puede determinar el contenedor")
             memory = str(int(action["params"]["memory_bytes"]))
-            containers = [{"name": target, "resources": {"limits": {"memory": memory}}}]
+            containers = [{"name": facts["target_container"], "resources": {"limits": {"memory": memory}}}]
             patch = {"spec": {"template": {"spec": {"containers": containers}}}}
             self.kubectl(namespace, "patch", resource, "--patch", json.dumps(patch))
         else:
@@ -218,10 +258,30 @@ class Executor:
         self.emit(incident_id, "action_allowed", action["type"], facts=facts, target=action["target"])
 
         try:
+            # Se registra antes de actuar: si el historial no se puede guardar, no se actúa.
+            # Si la acción falla después, la marca se queda: cuenta como intento (conservador).
+            now = datetime.now(timezone.utc)
+            deployment = self.get_json(action["namespace"], "deployment", action["target"])
+            history = self.recent_history(deployment, now)
+            if history is None:
+                raise KubectlError("historial de acciones no interpretable")
+            self.record_action(action["namespace"], action["target"], history, now)
             self.apply(action, facts)
-        except KubectlError as error:
+        except (KubectlError, KeyError, ValueError) as error:
             self.emit(incident_id, "action_failed", error, target=action["target"])
             return 502, {"status": "failed", "incident_id": incident_id, "reasons": [str(error)]}
+
+        if action["type"] == "rollout_undo":
+            # El rollback copia las anotaciones de la revisión antigua y borra las demás. La acción
+            # ya se aplicó: si no se puede reescribir el historial, se avisa, pero no se da por fallida.
+            for _ in range(3):
+                try:
+                    self.record_action(action["namespace"], action["target"], history, now)
+                    break
+                except KubectlError as error:
+                    last_error = error
+            else:
+                self.emit(incident_id, "history_rewrite_failed", last_error, target=action["target"])
         self.emit(incident_id, "action_executed", action["type"], target=action["target"])
         return 200, {"status": "executed", "incident_id": incident_id}
 

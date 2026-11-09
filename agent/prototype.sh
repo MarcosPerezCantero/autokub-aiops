@@ -6,12 +6,14 @@
 set -euo pipefail
 
 PROPOSER=${1:-rules}
+export AUTOKUB_CONFIG=${AUTOKUB_CONFIG:-config/lab.json}
 
 if [[ ! -f .local/reader.kubeconfig || ! -f .local/executor.kubeconfig ]]; then
-  ./infra/service-accounts.sh
+  ./infra/service-accounts.sh "$AUTOKUB_CONFIG"
 fi
 
-opa run --server --addr 127.0.0.1:8181 --log-level error policies/remediation.rego &
+# La configuración se carga como datos en data.autokub.config: la política no tiene listas fijas
+opa run --server --addr 127.0.0.1:8181 --log-level error policies/remediation.rego "autokub.config:$AUTOKUB_CONFIG" &
 OPA_PID=$!
 python3 executor/executor.py > /dev/null &
 EXECUTOR_PID=$!

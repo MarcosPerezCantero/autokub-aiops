@@ -12,7 +12,6 @@ from typing import Any, TypedDict
 import anthropic
 from langgraph.graph import END, START, StateGraph
 
-NAMESPACE = "otel-demo"
 KUBECONFIG = os.environ.get("AUTOKUB_READER_KUBECONFIG", ".local/reader.kubeconfig")
 MODEL = os.environ.get("AUTOKUB_MODEL", "claude-opus-5-5")
 EFFORT = os.environ.get("AUTOKUB_EFFORT", "medium")
@@ -25,7 +24,7 @@ SENSITIVE_NAME = re.compile(r"PASSWORD|PASSWD|SECRET|TOKEN|KEY|CONNECTION|CREDEN
 URL_CREDENTIALS = re.compile(r"://[^/\s:@]+:[^/\s@]+@")
 REVISION_ANNOTATION = "deployment.kubernetes.io/revision"
 
-SYSTEM_PROMPT = f"""Eres un agente de operaciones para el namespace {NAMESPACE} de Kubernetes.
+SYSTEM_PROMPT = """Eres un agente de operaciones de Kubernetes. Trabajas en el namespace indicado en el incidente; las herramientas solo leen ese namespace.
 Recibes un incidente, lo diagnosticas con las herramientas de lectura y terminas llamando a propose_action exactamente una vez.
 
 Acciones disponibles:
@@ -100,8 +99,8 @@ TOOLS = [
 ]
 
 
-def kubectl(*args):
-    command = ["kubectl", "--kubeconfig", KUBECONFIG, "-n", NAMESPACE, *args]
+def kubectl(namespace, *args):
+    command = ["kubectl", "--kubeconfig", KUBECONFIG, "-n", namespace, *args]
     result = subprocess.run(command, capture_output=True, text=True, timeout=30)
     return result.stdout if result.returncode == 0 else f"error: {result.stderr.strip()[:300]}"
 
@@ -186,34 +185,39 @@ def pods_overview(pods):
     return overview
 
 
-def run_tool(name, args):
-    """Ejecuta una herramienta de lectura. Los argumentos del modelo se validan antes de usarlos."""
+def run_tool(name, args, namespace):
+    """Ejecuta una herramienta de lectura en el namespace del incidente.
+
+    El namespace lo fija el detector, no el modelo. Los argumentos del modelo se validan antes de usarlos.
+    """
     try:
+        namespace = checked_name(namespace)
         if name == "list_pods":
-            return untrusted(json.dumps(pods_overview(json.loads(kubectl("get", "pods", "-o", "json"))["items"])))
+            pods = json.loads(kubectl(namespace, "get", "pods", "-o", "json"))["items"]
+            return untrusted(json.dumps(pods_overview(pods)))
         if name == "get_pod_logs":
             pod, container = checked_name(args["pod"]), checked_name(args["container"])
-            return untrusted(kubectl("logs", pod, "-c", container, f"--tail={MAX_LOG_LINES}"))
+            return untrusted(kubectl(namespace, "logs", pod, "-c", container, f"--tail={MAX_LOG_LINES}"))
         if name == "get_pod_events":
             pod = checked_name(args["pod"])
-            return untrusted(kubectl("get", "events", "--field-selector", f"involvedObject.name={pod}"))
+            return untrusted(kubectl(namespace, "get", "events", "--field-selector", f"involvedObject.name={pod}"))
         if name == "get_deployment_revisions":
             deployment = checked_name(args["deployment"])
-            items = json.loads(kubectl("get", "replicasets", "-o", "json"))["items"]
+            items = json.loads(kubectl(namespace, "get", "replicasets", "-o", "json"))["items"]
             return untrusted(json.dumps(compare_revisions(items, deployment), ensure_ascii=False))
     except (KeyError, ValueError, subprocess.SubprocessError) as error:
         return f"error: {error}"
     return "error: herramienta desconocida"
 
 
-def to_action(proposal):
-    """Traduce la propuesta del modelo. El namespace no lo elige el modelo."""
+def to_action(proposal, namespace):
+    """Traduce la propuesta del modelo. El namespace no lo elige el modelo, sino el incidente."""
     if proposal["type"] == "escalate":
         return {"type": "escalate", "params": {"summary": proposal.get("reason", "")}}
     params = {}
     if proposal["type"] == "set_memory_limit":
         params["memory_bytes"] = proposal.get("memory_bytes")
-    return {"type": proposal["type"], "namespace": NAMESPACE, "target": proposal["target"], "params": params}
+    return {"type": proposal["type"], "namespace": namespace, "target": proposal["target"], "params": params}
 
 
 class State(TypedDict):
@@ -227,7 +231,7 @@ class State(TypedDict):
     model: str | None
 
 
-def build_graph(client, emit, incident_id):
+def build_graph(client, emit, incident_id, namespace):
     def think(state):
         response = client.beta.messages.create(
             model=MODEL,
@@ -272,7 +276,7 @@ def build_graph(client, emit, incident_id):
     def tools(state):
         results = []
         for call in state["pending"]:
-            output = run_tool(call.name, call.input)
+            output = run_tool(call.name, call.input, namespace)
             emit(incident_id, "agent_tool_result", output[:MAX_EVENT_RESULT], component="agent", tool=call.name)
             results.append({"type": "tool_result", "tool_use_id": call.id, "content": output})
         return {"messages": state["messages"] + [{"role": "user", "content": results}], "pending": []}
@@ -289,7 +293,7 @@ def build_graph(client, emit, incident_id):
 def diagnose(incident, client=None, emit=lambda *args, **kwargs: None):
     client = client or anthropic.Anthropic()
     prompt = f"Incidente detectado:\n{untrusted(json.dumps(incident, ensure_ascii=False))}"
-    return build_graph(client, emit, incident.get("id")).invoke(
+    return build_graph(client, emit, incident.get("id"), incident.get("namespace")).invoke(
         {
             "messages": [{"role": "user", "content": prompt}],
             "pending": [],
@@ -333,4 +337,4 @@ def propose(incident, emit=None, client=None):
         target=result["proposal"].get("target"),
         **usage,
     )
-    return to_action(result["proposal"])
+    return to_action(result["proposal"], incident["namespace"])

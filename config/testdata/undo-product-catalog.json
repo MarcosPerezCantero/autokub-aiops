@@ -1,0 +1,1 @@
+{"action": {"type": "rollout_undo", "namespace": "otel-demo", "target": "product-catalog", "params": {}}, "facts": {"deployment_exists": true, "previous_revision": 4, "unhealthy_pods": 1, "actions_last_hour_on_target": 0}}

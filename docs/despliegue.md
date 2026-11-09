@@ -55,15 +55,17 @@ OPA, en cambio, va dentro del pod del ejecutor: así solo él puede consultarlo,
 
 ## Configuración
 
-Toda la información que hoy está fijada para la demo pasa a un único fichero, que el chart convierte en un ConfigMap:
+Toda la información que antes estaba fijada para la demo vive en un único fichero. Quien instala escribe sus valores en YAML (`autokub.yaml`, los values del chart) y el chart los convierte en un ConfigMap con el JSON que leen los componentes. En el laboratorio, ese JSON es `config/lab.json`.
 
 ```yaml
 # autokub.yaml
 mode: propose            # propose (por defecto) | execute
 
 namespaces:
-  - name: tienda
+  tienda:
     targets: [cart, checkout, payment]   # Deployments sobre los que se puede actuar
+  pagos:
+    targets: [cobros]
 
 limits:
   max_actions_per_hour: 3                 # por Deployment
@@ -84,7 +86,7 @@ De esta misma configuración salen tres cosas, para que no haya copias que mante
 
 - **Lo que vigila el detector** y lo que el agente cuenta en su prompt (namespaces y servicios).
 - **Los datos de la política.** OPA recibe la configuración como `data`, y las reglas Rego dejan de tener listas fijas: `allowed_targets` y `namespace` pasan a leerse de `data.autokub`.
-- **El RBAC.** El chart genera un Role y un RoleBinding por cada namespace de la lista, con `resourceNames` limitados a sus `targets`.
+- **El RBAC.** Se genera un Role y un RoleBinding por cuenta y por cada namespace de la lista, con `resourceNames` limitados a sus `targets`. En el laboratorio lo hace `infra/rbac.py`; en el chart, sus plantillas.
 
 Así, RBAC y OPA siguen siendo dos barreras independientes, pero construidas desde la misma fuente: si la política tuviera un error, RBAC sigue impidiendo actuar fuera de la lista.
 
@@ -161,9 +163,17 @@ Si la aplicación se gestiona con Argo CD o Flux con autocorrección, un rollbac
 | Eventos | Un fichero compartido | Salida estándar de cada pod |
 | Instalación | Scripts y `make` | `helm install` |
 
+## Historial de acciones
+
+El límite de frecuencia necesita saber cuántas acciones se han aplicado sobre cada Deployment en la última hora. Ese historial no puede vivir en la memoria ni en un fichero del pod del ejecutor, porque se perdería al reiniciarse y el límite volvería a cero. Se guarda en el propio Deployment, en la anotación `autokub.io/action-history`, como una lista de marcas de tiempo:
+
+- El ejecutor **registra la acción antes de aplicarla**. Si no puede escribir la anotación, no actúa.
+- `kubectl rollout undo` copia en el Deployment las anotaciones de la revisión antigua y borra las demás, así que tras un rollback el ejecutor vuelve a escribir el historial.
+- Si la anotación no se puede interpretar, el hecho se envía a OPA como desconocido y la política deniega la acción.
+
+Escribir la anotación usa el mismo permiso `patch` que las acciones, así que no amplía lo que puede hacer el ejecutor.
+
 ## Decisiones abiertas
 
-- **Dónde guarda el ejecutor su historial de acciones.** Hoy el límite de frecuencia se calcula leyendo el fichero de eventos local; en un pod ese fichero se pierde al reiniciarse y el límite volvería a cero. Opciones: una anotación en cada Deployment escrita por el propio ejecutor (el estado vive en el clúster y sobrevive a reinicios), un volumen persistente o un ConfigMap. Si no se puede leer el historial, la acción se deniega.
-- **Un namespace o varios** en la primera versión. El diseño admite varios; la implementación puede empezar por uno.
 - **La vista en el clúster.** Leer logs de pods es sencillo pero depende de su retención; alternativa: que la vista no se instale y los eventos se consulten en el sistema de logs del clúster.
 - **Remediación con GitOps**: ADR 0003.

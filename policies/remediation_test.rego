@@ -2,6 +2,15 @@ package autokub.remediation_test
 
 import data.autokub.remediation
 
+# Misma forma que config/lab.json, con un segundo namespace para comprobar que no se mezclan
+cfg := {
+	"namespaces": {
+		"otel-demo": {"targets": ["ad", "cart", "checkout", "currency", "email", "frontend", "payment", "product-catalog", "quote", "recommendation", "shipping"]},
+		"tienda": {"targets": ["api"]},
+	},
+	"limits": {"max_actions_per_hour": 3, "max_memory_bytes": 536870912},
+}
+
 undo := {
 	"action": {"type": "rollout_undo", "namespace": "otel-demo", "target": "product-catalog", "params": {}},
 	"facts": {
@@ -32,13 +41,13 @@ with_action(base, patch) := object.union(base, {"action": patch})
 with_facts(base, patch) := object.union(base, {"facts": patch})
 
 denied(case_input, reason) if {
-	result := remediation.decision with input as case_input
+	result := remediation.decision with input as case_input with data.autokub.config as cfg
 	result.allow == false
 	reason in result.deny_reasons
 }
 
 allowed(case_input) if {
-	result := remediation.decision with input as case_input
+	result := remediation.decision with input as case_input with data.autokub.config as cfg
 	result.allow == true
 	result.deny_reasons == []
 }
@@ -170,7 +179,47 @@ test_memory_missing_oom_fact_denied if {
 
 test_all_reasons_reported if {
 	case_input := {"action": {"type": "rollout_undo", "namespace": "kube-system", "target": "flagd", "params": {}}, "facts": {}}
-	result := remediation.decision with input as case_input
+	result := remediation.decision with input as case_input with data.autokub.config as cfg
 	result.allow == false
 	count(result.deny_reasons) >= 5
+}
+
+# Configuración
+
+test_second_namespace_allowed if allowed(with_action(undo, {"namespace": "tienda", "target": "api"}))
+
+test_targets_do_not_cross_namespaces if {
+	denied(with_action(undo, {"namespace": "tienda", "target": "cart"}), "target no permitido")
+	denied(with_action(undo, {"target": "api"}), "target no permitido")
+}
+
+test_without_config_everything_denied if {
+	result := remediation.decision with input as undo with data.autokub.config as {}
+	result.allow == false
+	"namespace no permitido" in result.deny_reasons
+	"target no permitido" in result.deny_reasons
+	"límite de frecuencia superado" in result.deny_reasons
+}
+
+test_without_config_escalate_allowed if {
+	result := remediation.decision with input as {"action": {"type": "escalate"}} with data.autokub.config as {}
+	result.allow == true
+}
+
+test_rate_limit_comes_from_config if {
+	strict := object.union(cfg, {"limits": {"max_actions_per_hour": 1}})
+	result := remediation.decision with input as with_facts(undo, {"actions_last_hour_on_target": 1}) with data.autokub.config as strict
+	"límite de frecuencia superado" in result.deny_reasons
+}
+
+test_memory_cap_comes_from_config if {
+	small := object.union(cfg, {"limits": {"max_memory_bytes": 150000000}})
+	result := remediation.decision with input as memory with data.autokub.config as small
+	"límite de memoria no válido" in result.deny_reasons
+}
+
+test_non_numeric_limit_denied if {
+	broken := object.union(cfg, {"limits": {"max_actions_per_hour": "3"}})
+	result := remediation.decision with input as undo with data.autokub.config as broken
+	"límite de frecuencia superado" in result.deny_reasons
 }
