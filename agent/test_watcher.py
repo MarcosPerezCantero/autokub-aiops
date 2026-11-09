@@ -285,6 +285,42 @@ class NamespacesTest(unittest.TestCase):
         self.assertEqual(len(self.sent), 1)
 
 
+class ProposeModeTest(unittest.TestCase):
+    def setUp(self):
+        self.sent = []
+        self.now = 0
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.events_file = os.path.join(tmp.name, "events.jsonl")
+
+    def send(self, payload):
+        self.sent.append(payload)
+        return {"status": "proposed"}
+
+    def events(self):
+        with open(self.events_file, encoding="utf-8") as events:
+            return [json.loads(line) for line in events]
+
+    def test_proposal_is_sent_once_and_never_verified(self):
+        watcher = Watcher(send=self.send, events_file=self.events_file, clock=lambda: self.now)
+        for _ in range(60):
+            self.now += 5
+            watcher.tick(FAILING, REPLICA_SETS, BROKEN, "otel-demo")
+        self.assertEqual(len(self.sent), 1)
+        kinds = [e["event"] for e in self.events()]
+        self.assertNotIn("verification_failed", kinds)
+        self.assertNotIn("incident_escalated", kinds)
+
+    def test_closes_when_failure_disappears(self):
+        watcher = Watcher(send=self.send, events_file=self.events_file, clock=lambda: self.now)
+        watcher.tick(FAILING, REPLICA_SETS, BROKEN, "otel-demo")
+        self.now += module.DETECTION["clear_seconds"]
+        watcher.tick([], REPLICA_SETS, [], "otel-demo")
+        closed = [e for e in self.events() if e["event"] == "incident_closed"]
+        self.assertEqual(closed[0]["summary"], "propuesta registrada; sin fallos desde entonces")
+        self.assertEqual(watcher.active, {})
+
+
 class LoadConfigTest(unittest.TestCase):
     def write(self, config):
         tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)

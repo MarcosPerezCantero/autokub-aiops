@@ -1,6 +1,8 @@
 # Despliegue en un clúster real
 
-> **Estado: diseño objetivo de la versión 0.1** ([ADR 0006](adr/0006-producto-instalable.md)). Aún no está implementado. Hoy el sistema funciona como laboratorio: los componentes corren como procesos en una máquina local contra la tienda de demostración, tal como describe [arquitectura.md](arquitectura.md). Este documento define cómo se instala y funciona en cualquier clúster de Kubernetes, y guía los pasos de la versión 0.1.
+> **Estado: en construcción para la versión 0.1** ([ADR 0006](adr/0006-producto-instalable.md)). Hechos: configuración en un fichero, historial en el Deployment y modo propuesta. Pendientes: LiteLLM, chart de Helm e imágenes.
+>
+> **Diseño objetivo de la versión 0.1** ([ADR 0006](adr/0006-producto-instalable.md)). Aún no está implementado. Hoy el sistema funciona como laboratorio: los componentes corren como procesos en una máquina local contra la tienda de demostración, tal como describe [arquitectura.md](arquitectura.md). Este documento define cómo se instala y funciona en cualquier clúster de Kubernetes, y guía los pasos de la versión 0.1.
 
 La arquitectura no cambia: un agente que solo lee y propone, un ejecutor determinista que es el único que escribe, OPA autorizando cada acción y verificación posterior. Lo que cambia es dónde corre cada pieza, de dónde saca su configuración y con qué permisos.
 

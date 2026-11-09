@@ -1,6 +1,6 @@
 # Arquitectura
 
-Este documento describe el sistema tal como funciona hoy en el laboratorio. Cómo se instala y funciona en cualquier clúster: [despliegue.md](despliegue.md).
+Este documento describe el sistema tal como funciona hoy en el laboratorio, donde `config/lab.json` activa el modo `execute`. Por defecto el sistema solo propone (ver [despliegue.md](despliegue.md#modos-de-funcionamiento)). Cómo se instala y funciona en cualquier clúster: [despliegue.md](despliegue.md).
 
 ## Componentes
 
@@ -148,7 +148,7 @@ Cada componente emite un evento por cada paso del incidente, con un formato com�
 }
 ```
 
-Los eventos son `incident_detected`, `agent_thinking`, `agent_text`, `agent_tool_call`, `agent_tool_result`, `agent_diagnosis`, `agent_failed`, `action_proposed`, `action_rejected`, `action_allowed`, `action_denied`, `action_executed`, `action_failed`, `verification_passed`, `verification_failed`, `incident_escalated` e `incident_closed`. El `incident_id` permite reconstruir el recorrido completo de cada incidente.
+Los eventos son `incident_detected`, `agent_thinking`, `agent_text`, `agent_tool_call`, `agent_tool_result`, `agent_diagnosis`, `agent_failed`, `action_proposed`, `action_rejected`, `action_allowed`, `action_denied`, `action_executed`, `action_would_execute` (modo propuesta), `action_failed`, `history_rewrite_failed`, `verification_passed`, `verification_failed`, `incident_escalated` e `incident_closed`. El `incident_id` permite reconstruir el recorrido completo de cada incidente.
 
 Sobre estos eventos se apoyan dos usos:
 

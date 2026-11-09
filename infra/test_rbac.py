@@ -4,7 +4,7 @@ import unittest
 
 from rbac import EXECUTOR, READER, SYSTEM_NAMESPACE, manifests
 
-CONFIG = {"namespaces": {"tienda": {"targets": ["api", "web"]}, "pagos": {"targets": ["cobros"]}}}
+CONFIG = {"mode": "execute", "namespaces": {"tienda": {"targets": ["api", "web"]}, "pagos": {"targets": ["cobros"]}}}
 
 
 def find(items, kind, name, namespace):
@@ -20,6 +20,22 @@ class RbacTest(unittest.TestCase):
         patchable = [r for r in rules if "patch" in r["verbs"]]
         self.assertEqual(patchable, [{**patchable[0], "resourceNames": ["api", "web"]}])
         self.assertEqual(find(self.items, "Role", EXECUTOR, "pagos")["rules"][0]["resourceNames"], ["cobros"])
+
+    def test_propose_mode_has_no_write_permission(self):
+        for config in ({**CONFIG, "mode": "propose"}, {"namespaces": CONFIG["namespaces"]}):
+            with self.subTest(config=config):
+                verbs = {
+                    verb
+                    for item in manifests(config)["items"]
+                    if item["kind"] == "Role"
+                    for rule in item["rules"]
+                    for verb in rule["verbs"]
+                }
+                self.assertEqual(verbs, {"get", "list"})
+
+    def test_unknown_mode_fails(self):
+        with self.assertRaises(ValueError):
+            manifests({**CONFIG, "mode": "Execute"})
 
     def test_reader_never_writes(self):
         for item in self.items:

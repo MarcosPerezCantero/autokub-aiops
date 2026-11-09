@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from executor import HISTORY_ANNOTATION, Executor, KubectlError, ask_opa, parse_memory, validate
+from executor import HISTORY_ANNOTATION, Executor, KubectlError, ask_opa, load_mode, parse_memory, validate
 
 UNDO = {"type": "rollout_undo", "namespace": "otel-demo", "target": "cart", "params": {}}
 ALLOW = {"allow": True, "deny_reasons": []}
@@ -80,12 +80,12 @@ class ExecutorTest(unittest.TestCase):
         self.events_file = os.path.join(self.tmp.name, "events.jsonl")
         self.opa_inputs = []
 
-    def executor(self, kubectl=None, decision=ALLOW):
+    def executor(self, kubectl=None, decision=ALLOW, mode="execute"):
         def opa(opa_input):
             self.opa_inputs.append(opa_input)
             return decision
 
-        return Executor(kubectl=kubectl or FakeKubectl(cluster()), opa=opa, events_file=self.events_file)
+        return Executor(kubectl=kubectl or FakeKubectl(cluster()), opa=opa, events_file=self.events_file, mode=mode)
 
     def events(self):
         with open(self.events_file, encoding="utf-8") as events:
@@ -98,6 +98,39 @@ class ExecutorTest(unittest.TestCase):
         self.assertEqual(kubectl.actions(), [("rollout", "undo", "deployment/cart", "--to-revision=2")])
         self.assertEqual(self.events(), ["action_proposed", "action_allowed", "action_executed"])
         self.assertEqual(len(kubectl.history()), 1)
+
+    def test_propose_mode_asks_opa_but_never_writes(self):
+        kubectl = FakeKubectl(cluster())
+        code, body = self.executor(kubectl, mode="propose").handle({"incident_id": "inc-1", "action": UNDO})
+        self.assertEqual((code, body["status"]), (200, "proposed"))
+        self.assertEqual(kubectl.writes, [])
+        self.assertEqual(len(self.opa_inputs), 1)
+        self.assertEqual(self.events(), ["action_proposed", "action_allowed", "action_would_execute"])
+
+    def test_propose_mode_still_reports_denials(self):
+        kubectl = FakeKubectl(cluster())
+        code, _ = self.executor(kubectl, {"allow": False, "deny_reasons": ["x"]}, mode="propose").handle({"action": UNDO})
+        self.assertEqual(code, 403)
+        self.assertEqual(self.events(), ["action_proposed", "action_denied"])
+
+    def test_default_mode_is_propose(self):
+        self.assertEqual(Executor(events_file=self.events_file).mode, "propose")
+
+    def test_unknown_mode_is_refused(self):
+        with self.assertRaises(ValueError):
+            Executor(mode="yolo")
+
+    def test_load_mode(self):
+        for content, expected in (({}, "propose"), ({"mode": "execute"}, "execute"), ({"mode": "propose"}, "propose")):
+            with self.subTest(content=content):
+                path = os.path.join(self.tmp.name, "config.json")
+                with open(path, "w", encoding="utf-8") as file:
+                    json.dump(content, file)
+                self.assertEqual(load_mode(path), expected)
+        with open(path, "w", encoding="utf-8") as file:
+            json.dump({"mode": "Execute"}, file)
+        with self.assertRaises(ValueError):
+            load_mode(path)
 
     def test_denied_action_does_not_touch_cluster(self):
         kubectl = FakeKubectl(cluster())

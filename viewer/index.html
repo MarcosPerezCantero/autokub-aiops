@@ -97,6 +97,7 @@ const EFFECTS = {
   action_allowed: ["opa", "ok", "Autorizada"],
   action_denied: ["opa", "bad", "Bloqueada"],
   action_executed: ["executor", "ok", "Aplicada"],
+  action_would_execute: ["executor", "ok", "Modo propuesta: no se aplica"],
   action_failed: ["executor", "bad", "Falló al aplicarla"],
   verification_passed: ["verify", "ok", "Recuperación verificada"],
   verification_failed: ["verify", "bad", "Sin recuperar"],
@@ -107,7 +108,7 @@ const LABELS = {
   agent_tool_call: "Herramienta", agent_tool_result: "Resultado", agent_diagnosis: "Diagnóstico",
   agent_failed: "El agente no pudo proponer", action_proposed: "Acción propuesta", action_rejected: "Propuesta rechazada",
   action_allowed: "OPA autoriza", action_denied: "OPA bloquea", action_executed: "Acción aplicada",
-  action_failed: "Fallo al aplicar", verification_passed: "Verificación superada", verification_failed: "Verificación fallida",
+  action_would_execute: "Se aplicaría (modo propuesta)", action_failed: "Fallo al aplicar", verification_passed: "Verificación superada", verification_failed: "Verificación fallida",
   incident_escalated: "Aviso a una persona", incident_closed: "Incidente cerrado",
 };
 
@@ -172,7 +173,11 @@ function renderBanner(items) {
   const last = [...items].reverse().find((e) => ["incident_closed", "incident_escalated"].includes(e.event));
   const escalated = items.find((e) => e.event === "incident_escalated");
   const closed = items.find((e) => e.event === "incident_closed");
-  if (escalated) {
+  const proposed = items.find((e) => e.event === "action_would_execute");
+  if (proposed && !escalated) {
+    banner.className = "banner closed";
+    banner.textContent = `Modo propuesta: OPA autorizaría ${proposed.summary} sobre ${proposed.data.target}; no se ha aplicado`;
+  } else if (escalated) {
     banner.className = "banner escalated";
     banner.textContent = `Aviso a una persona: ${escalated.summary}`;
   } else if (closed) {

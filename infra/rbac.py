@@ -3,7 +3,8 @@
 
 Las cuentas viven en autokub-system. En cada namespace configurado se crea un Role por cuenta:
 - lector: solo lectura de pods, logs, eventos, Deployments y ReplicaSets, sin Secrets;
-- ejecutor: lectura para obtener los hechos y patch solo sobre los Deployments permitidos.
+- ejecutor: lectura para obtener los hechos y, solo en modo execute, patch sobre los Deployments
+  permitidos. En modo propose (el de por defecto) no tiene ningún permiso de escritura.
 La lista de Deployments sale del mismo fichero que lee OPA, para que no haya copias.
 
 Uso: python3 infra/rbac.py config/lab.json | kubectl apply -f -
@@ -35,6 +36,9 @@ def binding(name, namespace):
 
 
 def manifests(config):
+    mode = config.get("mode", "propose")
+    if mode not in ("propose", "execute"):
+        raise ValueError(f"modo no válido: {mode!r}")
     namespaces = config.get("namespaces")
     if not isinstance(namespaces, dict) or not namespaces:
         raise ValueError("la configuración no define namespaces")
@@ -57,7 +61,7 @@ def manifests(config):
             {
                 "apiGroups": ["apps"],
                 "resources": ["deployments"],
-                "verbs": ["get", "patch"],
+                "verbs": ["get", "patch"] if mode == "execute" else ["get"],
                 "resourceNames": sorted(targets),
             },
             {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get", "list"]},

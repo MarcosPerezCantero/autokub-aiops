@@ -1,4 +1,5 @@
 {
+  "mode": "execute",
   "namespaces": {
     "otel-demo": {
       "targets": [

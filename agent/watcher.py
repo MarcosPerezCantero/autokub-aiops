@@ -34,7 +34,9 @@ DETECTION = {
 }
 REVISION_ANNOTATION = "deployment.kubernetes.io/revision"
 
-PENDING, VERIFYING, ESCALATED = "pending", "verifying", "escalated"
+PENDING, VERIFYING, ESCALATED, PROPOSED = "pending", "verifying", "escalated", "proposed"
+# Estados en los que el incidente sigue abierto sin que se haga nada más hasta que el fallo desaparece
+WAITING = {ESCALATED: "escalado", PROPOSED: "propuesta registrada"}
 
 
 def load_config(path=CONFIG_FILE):
@@ -176,12 +178,13 @@ class Watcher:
                 continue
             if state["phase"] == VERIFYING and name in by_name:
                 self.verify(name, state, by_name[name], replica_sets, pods, incidents.get(name))
-            elif state["phase"] == ESCALATED:
+            elif state["phase"] in WAITING:
                 if name in incidents:
                     state["last_seen"] = self.clock()
                 elif self.clock() - state["last_seen"] >= self.detection["clear_seconds"]:
                     del self.active[(namespace, name)]
-                    self.emit(state["id"], "incident_closed", "escalado; sin fallos desde entonces", deployment=name)
+                    summary = f"{WAITING[state['phase']]}; sin fallos desde entonces"
+                    self.emit(state["id"], "incident_closed", summary, deployment=name)
 
         for name, incident in incidents.items():
             state = self.active.get((namespace, name))
@@ -204,6 +207,9 @@ class Watcher:
             state.update(phase=VERIFYING, started=self.clock(), healthy_since=None, restarts=None)
         elif status == "escalated":
             state.update(phase=ESCALATED, last_seen=self.clock())
+        elif status == "proposed":
+            # Modo propuesta: no hay nada que verificar ni que reintentar
+            state.update(phase=PROPOSED, last_seen=self.clock())
         else:
             reasons = ", ".join(result.get("reasons", [])) or "sin motivo"
             self.escalate(state, f"{incident['deployment']}: {status} ({reasons})")

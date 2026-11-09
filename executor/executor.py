@@ -20,6 +20,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 OPA_URL = os.environ.get("AUTOKUB_OPA_URL", "http://127.0.0.1:8181/v1/data/autokub/remediation/decision")
 EVENTS_FILE = os.environ.get("AUTOKUB_EVENTS", ".local/events.jsonl")
 KUBECONFIG = os.environ.get("AUTOKUB_KUBECONFIG", ".local/executor.kubeconfig")
+CONFIG_FILE = os.environ.get("AUTOKUB_CONFIG", "config/lab.json")
+# propose: consulta a OPA y registra qué haría, sin modificar el clúster. Es el modo por defecto.
+MODES = ("propose", "execute")
 ADDRESS = ("127.0.0.1", int(os.environ.get("AUTOKUB_EXECUTOR_PORT", "8090")))
 
 MAX_BODY_BYTES = 16384
@@ -35,6 +38,15 @@ HISTORY_WINDOW = timedelta(hours=1)
 
 class KubectlError(Exception):
     pass
+
+
+def load_mode(path=CONFIG_FILE):
+    """Modo de funcionamiento. Sin indicarlo, solo propone; un valor desconocido impide arrancar."""
+    with open(path, encoding="utf-8") as file:
+        mode = json.load(file).get("mode", "propose")
+    if mode not in MODES:
+        raise ValueError(f"modo no válido: {mode!r}")
+    return mode
 
 
 def run_kubectl(namespace, *args, payload=None):
@@ -96,10 +108,13 @@ def validate(proposal):
 
 
 class Executor:
-    def __init__(self, kubectl=run_kubectl, opa=ask_opa, events_file=EVENTS_FILE):
+    def __init__(self, kubectl=run_kubectl, opa=ask_opa, events_file=EVENTS_FILE, mode="propose"):
+        if mode not in MODES:
+            raise ValueError(f"modo no válido: {mode!r}")
         self.kubectl = kubectl
         self.opa = opa
         self.events_file = events_file
+        self.mode = mode
 
     def emit(self, incident_id, event, summary, **data):
         record = {
@@ -257,6 +272,11 @@ class Executor:
             return 403, {"status": "denied", "incident_id": incident_id, "reasons": decision["deny_reasons"]}
         self.emit(incident_id, "action_allowed", action["type"], facts=facts, target=action["target"])
 
+        if self.mode != "execute":
+            # Modo propuesta: queda registrado qué se habría hecho y que OPA lo autorizaba
+            self.emit(incident_id, "action_would_execute", action["type"], target=action["target"])
+            return 200, {"status": "proposed", "incident_id": incident_id}
+
         try:
             # Se registra antes de actuar: si el historial no se puede guardar, no se actúa.
             # Si la acción falla después, la marca se queda: cuenta como intento (conservador).
@@ -315,8 +335,9 @@ def make_handler(executor):
 
 
 def main():
-    server = HTTPServer(ADDRESS, make_handler(Executor()))
-    print(f"Ejecutor en http://{ADDRESS[0]}:{ADDRESS[1]}/actions", file=sys.stderr, flush=True)
+    mode = load_mode()
+    server = HTTPServer(ADDRESS, make_handler(Executor(mode=mode)))
+    print(f"Ejecutor en http://{ADDRESS[0]}:{ADDRESS[1]}/actions (modo: {mode})", file=sys.stderr, flush=True)
     server.serve_forever()
 
 
