@@ -130,8 +130,8 @@ make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthr
 - [ ] **Versión 0.1 instalable**: CrashLoopBackOff en cualquier clúster ([ADR 0006](docs/adr/0006-producto-instalable.md))
   - [ ] Configuración en un fichero (namespace, servicios permitidos, límites), sin datos de la demo en el código
   - [ ] Modo solo propuesta por defecto: muestra la acción y la decisión de OPA sin ejecutarla
-  - [ ] Chart de Helm e imágenes en GHCR; agente, ejecutor y OPA como pods
   - [ ] Modelo intercambiable vía LiteLLM
+  - [ ] Chart de Helm e imágenes en GHCR; agente, ejecutor y OPA como pods
   - [ ] Demo de prueba en un comando (k3d, tienda, sistema e incidente)
   - [x] Licencia MIT
   - [ ] Release 0.1 con changelog
