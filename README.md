@@ -46,7 +46,7 @@ El agente opera sobre un catálogo cerrado, con prioridad para los casos en que 
 
 Cada incidente tiene un script que lo provoca (`scenarios/`) y un runbook de resolución manual (`runbooks/`), que sirve como línea base para medir al agente.
 
-Las acciones permitidas al agente también forman una lista cerrada: ver [ADR 0004](docs/adr/0004-alcance-del-agente.md). La [arquitectura](docs/arquitectura.md) detalla los componentes y la frontera de seguridad, y el [plan de evaluación](docs/evaluacion.md) cómo se mide el resultado.
+Las acciones permitidas al agente también forman una lista cerrada: ver [ADR 0004](docs/adr/0004-alcance-del-agente.md). La [arquitectura](docs/arquitectura.md) detalla los componentes y la frontera de seguridad, el [despliegue](docs/despliegue.md) cómo funcionará instalado en cualquier clúster, y el [plan de evaluación](docs/evaluacion.md) cómo se mide el resultado.
 
 ## Producto objetivo
 

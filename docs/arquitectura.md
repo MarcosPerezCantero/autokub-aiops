@@ -1,5 +1,7 @@
 # Arquitectura
 
+Este documento describe el sistema tal como funciona hoy en el laboratorio. Cómo se instala y funciona en cualquier clúster: [despliegue.md](despliegue.md).
+
 ## Componentes
 
 ```mermaid
