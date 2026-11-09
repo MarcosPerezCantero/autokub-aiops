@@ -1,0 +1,9 @@
+# Reglas de lint fijadas para que no cambien al actualizar ruff.
+# py39: el ejecutor y la vista se ejecutan con el python3 del sistema, sin dependencias.
+target-version = "py39"
+line-length = 120
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+# Las líneas largas son textos del prompt; partirlas cambiaría lo que recibe el modelo.
+ignore = ["E501"]

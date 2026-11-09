@@ -98,12 +98,21 @@ sudo ./infra/bootstrap/install-k8s-tools.sh
 
 Los scripts son idempotentes: pueden ejecutarse varias veces y solo cambian lo que falta o está desactualizado.
 
+En macOS (Apple Silicon), las herramientas se instalan con Homebrew y Docker lo aporta OrbStack o Docker Desktop:
+
+```bash
+brew install kubectl k3d helm k9s opa ruff python@3.12
+make venv PYTHON=python3.12
+```
+
 ```bash
 make up       # crea el clúster k3d (1 nodo de control + 2 de trabajo), definido en infra/k3d/cluster.yaml
 make status   # estado del clúster
 make stop     # para el clúster sin borrarlo (make up lo reanuda)
 make demo     # despliega la tienda (chart oficial + deploy/otel-demo/values.yaml) en http://localhost:8080
 make down     # destruye el clúster
+make test           # todos los tests, sin clúster (políticas, ejecutor, agente y vista)
+make lint           # comprobaciones de Rego y Python
 make policies-test  # comprueba las políticas Rego y ejecuta sus tests
 make venv           # crea el entorno de Python del agente
 make agent-test     # ejecuta los tests del ejecutor y del agente
@@ -117,7 +126,7 @@ make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthr
 
 - [x] Entorno reproducible del laboratorio (Docker Engine, kubectl, k3d, Helm)
 - [x] Despliegue del producto en Kubernetes con el chart oficial
-- [ ] Prototipo vertical: un incidente de extremo a extremo (detección → agente → OPA → ejecución → verificación)
+- [x] Prototipo vertical: un incidente de extremo a extremo (detección → agente → OPA → ejecución → verificación)
 - [ ] Observabilidad: dashboards y alertas para los incidentes del catálogo
 - [ ] Escenarios y runbooks manuales; MTTR de referencia
 - [ ] Manifiestos propios, CI/CD en el fork y GitOps con Argo CD

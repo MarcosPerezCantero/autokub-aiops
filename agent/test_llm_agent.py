@@ -3,7 +3,6 @@ from types import SimpleNamespace as NS
 from unittest import mock
 
 import anthropic
-
 import llm_agent
 from llm_agent import compare_revisions, propose, redact, run_tool, to_action, untrusted
 
