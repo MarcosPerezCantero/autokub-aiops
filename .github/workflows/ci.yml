@@ -28,6 +28,13 @@ jobs:
         with:
           version: v4.3.1
 
+      - name: promtool (Prometheus 3.16.0, checksum verificado)
+        run: |
+          curl -fsSL -o /tmp/prom.tgz https://github.com/prometheus/prometheus/releases/download/v3.16.0/prometheus-3.16.0.linux-amd64.tar.gz
+          echo "68727009472a2c02e1ff7f062fd5b3e637285bffc8fc2d340c76fb449d6e0f34  /tmp/prom.tgz" | sha256sum -c -
+          tar -xzf /tmp/prom.tgz -C /tmp
+          sudo install -m 0755 /tmp/prometheus-3.16.0.linux-amd64/promtool /usr/local/bin/promtool
+
       - name: Herramientas
         run: pip install ruff==0.17.4
 

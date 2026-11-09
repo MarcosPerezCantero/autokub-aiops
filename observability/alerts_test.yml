@@ -1,0 +1,113 @@
+# Tests unitarios de las alertas: promtool test rules observability/alerts_test.yml
+rule_files:
+  - alerts.yml
+evaluation_interval: 30s
+
+tests:
+  # Incidente 1: el estado alterna entre CrashLoopBackOff y Error (en Error la serie desaparece);
+  # con el back-off largo apenas hay reinicios nuevos, y aun así debe seguir alertando
+  - interval: 30s
+    input_series:
+      - series: 'kube_pod_container_status_waiting_reason{namespace="tienda",pod="cart-1",container="cart",reason="CrashLoopBackOff"}'
+        values: '_ 1 1 _ 1 1 1 1 _ _ _ _ _ _ _ _ 1 1 1 1 1 1'
+      # Un único reinicio sin pasar por CrashLoopBackOff no es un bucle
+      - series: 'kube_pod_container_status_waiting_reason{namespace="tienda",pod="web-1",container="web",reason="ContainerCreating"}'
+        values: '1 1 1 _ _ _ _ _ _ _ _ _'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: PodCrashLooping
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: PodCrashLooping
+        exp_alerts:
+          - exp_labels: {severity: critical, catalog: crashloop, namespace: tienda, pod: cart-1, container: cart, reason: CrashLoopBackOff}
+            exp_annotations:
+              summary: "tienda/cart-1 (cart) se reinicia en bucle"
+      # Cuatro minutos sin el estado por el back-off: sigue dentro de la ventana de 5 min
+      - eval_time: 7m30s
+        alertname: PodCrashLooping
+        exp_alerts:
+          - exp_labels: {severity: critical, catalog: crashloop, namespace: tienda, pod: cart-1, container: cart, reason: CrashLoopBackOff}
+            exp_annotations:
+              summary: "tienda/cart-1 (cart) se reinicia en bucle"
+
+  # Incidente 3: OOMKilled reciente; uno antiguo, sin reinicios nuevos, no alerta
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="tienda",pod="email-1",container="email",reason="OOMKilled"}'
+        values: '1x10'
+      - series: 'kube_pod_container_status_restarts_total{namespace="tienda",pod="email-1",container="email"}'
+        values: '0 0 0 1 1 1 1 1 1 1 1'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="tienda",pod="old-1",container="old",reason="OOMKilled"}'
+        values: '1x10'
+      - series: 'kube_pod_container_status_restarts_total{namespace="tienda",pod="old-1",container="old"}'
+        values: '4x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ContainerOOMKilled
+        exp_alerts:
+          - exp_labels: {severity: warning, catalog: oomkilled, namespace: tienda, pod: email-1, container: email, reason: OOMKilled}
+            exp_annotations:
+              summary: "tienda/email-1 (email) terminado por falta de memoria"
+
+  # Incidente 2: 20 % de errores en checkout; un error aislado en un servicio casi parado no alerta
+  - interval: 30s
+    input_series:
+      - series: 'traces_span_metrics_calls_total{k8s_namespace_name="tienda",service_name="checkout",span_kind="SPAN_KIND_SERVER",status_code="STATUS_CODE_UNSET"}'
+        values: '0+48x12'
+      - series: 'traces_span_metrics_calls_total{k8s_namespace_name="tienda",service_name="checkout",span_kind="SPAN_KIND_SERVER",status_code="STATUS_CODE_ERROR"}'
+        values: '0+12x12'
+      - series: 'traces_span_metrics_calls_total{k8s_namespace_name="tienda",service_name="payment",span_kind="SPAN_KIND_SERVER",status_code="STATUS_CODE_ERROR"}'
+        values: '0 0 0 0 0 0 1 1 1 1 1 1 1'
+      # Errores de un span de cliente no cuentan: el síntoma se mide en lo que el servicio sirve
+      - series: 'traces_span_metrics_calls_total{k8s_namespace_name="tienda",service_name="frontend",span_kind="SPAN_KIND_CLIENT",status_code="STATUS_CODE_ERROR"}'
+        values: '0+50x12'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ServiceErrorRateHigh
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ServiceErrorRateHigh
+        exp_alerts:
+          - exp_labels: {severity: critical, catalog: error-rate, k8s_namespace_name: tienda, service_name: checkout}
+            exp_annotations:
+              summary: "checkout: 20% de peticiones con error"
+
+  # Incidente 4: todas las peticiones de shipping tardan entre 1 y 2,5 s
+  - interval: 1m
+    input_series:
+      - series: 'traces_span_metrics_duration_milliseconds_bucket{k8s_namespace_name="tienda",service_name="shipping",span_kind="SPAN_KIND_SERVER",le="1000"}'
+        values: '0x15'
+      - series: 'traces_span_metrics_duration_milliseconds_bucket{k8s_namespace_name="tienda",service_name="shipping",span_kind="SPAN_KIND_SERVER",le="2500"}'
+        values: '0+60x15'
+      - series: 'traces_span_metrics_duration_milliseconds_bucket{k8s_namespace_name="tienda",service_name="shipping",span_kind="SPAN_KIND_SERVER",le="+Inf"}'
+        values: '0+60x15'
+      - series: 'traces_span_metrics_duration_milliseconds_bucket{k8s_namespace_name="tienda",service_name="quote",span_kind="SPAN_KIND_SERVER",le="1000"}'
+        values: '0+60x15'
+      - series: 'traces_span_metrics_duration_milliseconds_bucket{k8s_namespace_name="tienda",service_name="quote",span_kind="SPAN_KIND_SERVER",le="+Inf"}'
+        values: '0+60x15'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ServiceLatencyHigh
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ServiceLatencyHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, catalog: latency, k8s_namespace_name: tienda, service_name: shipping}
+            exp_annotations:
+              summary: "shipping: p95 de 2.425k ms"
+
+  - interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_unavailable{namespace="tienda",deployment="cart"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: DeploymentReplicasUnavailable
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: DeploymentReplicasUnavailable
+        exp_alerts:
+          - exp_labels: {severity: warning, catalog: availability, namespace: tienda, deployment: cart}
+            exp_annotations:
+              summary: "tienda/cart: 1 réplicas no disponibles"

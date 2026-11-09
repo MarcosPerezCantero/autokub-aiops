@@ -95,7 +95,7 @@ El sistema opera sobre un fork de la [OpenTelemetry Demo](https://github.com/ope
 | Área | Tecnologías |
 |------|-------------|
 | Clúster | k3d (k3s en Docker), Helm |
-| Observabilidad | kube-prometheus-stack, Loki, OpenTelemetry Collector, Jaeger |
+| Observabilidad | Prometheus, kube-state-metrics, Alertmanager, OpenTelemetry Collector, Jaeger, OpenSearch, Grafana ([ADR 0008](docs/adr/0008-observabilidad.md)) |
 | CI/CD | GitHub Actions (build selectivo por servicio, Trivy, SBOM), GHCR |
 | GitOps | Argo CD |
 | Agente | LangGraph; API de Anthropic o compatible con OpenAI (LiteLLM, Ollama…); Langfuse |
@@ -171,7 +171,7 @@ make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthr
   - [x] Demo de prueba en un comando (k3d, tienda, sistema e incidente)
   - [x] Licencia MIT
   - [ ] Release 0.1 con changelog
-- [ ] Observabilidad: dashboards y alertas para los incidentes del catálogo
+- [x] Observabilidad: alertas del catálogo con tests unitarios y panel de Grafana
 - [ ] Escenarios y runbooks manuales; MTTR de referencia
 - [ ] Manifiestos propios, CI/CD en el fork y GitOps con Argo CD, con remediación compatible con GitOps
 - [ ] Agente: ampliación al resto del catálogo
@@ -187,6 +187,7 @@ make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthr
 | [0005](docs/adr/0005-prototipo-vertical.md) | Prototipo vertical antes de completar la plataforma |
 | [0006](docs/adr/0006-producto-instalable.md) | Versión instalable antes de ampliar el catálogo |
 | [0007](docs/adr/0007-interfaz-con-el-modelo.md) | Interfaz con el modelo: API nativa o compatible con OpenAI |
+| [0008](docs/adr/0008-observabilidad.md) | Observabilidad sobre la pila que ya trae la aplicación |
 
 ## Licencia
 

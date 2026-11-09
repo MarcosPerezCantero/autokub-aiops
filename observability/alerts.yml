@@ -1,0 +1,71 @@
+# Alertas del catálogo de incidentes (docs/adr/0004-alcance-del-agente.md).
+# Métricas de Kubernetes: kube-state-metrics. Métricas de aplicación: span metrics del Collector.
+# Tests: observability/alerts_test.yml (make alerts-test). Despliegue: docs/adr/0008-observabilidad.md
+groups:
+  - name: autokub-catalogo
+    rules:
+      # Incidente 1: el contenedor se reinicia una y otra vez. Se mira si ha pasado por CrashLoopBackOff
+      # en los últimos 5 minutos, no el número de reinicios: Kubernetes espera cada vez más entre
+      # reinicios (hasta 5 min) y, tras un rato en bucle, apenas hay reinicios nuevos. El estado
+      # alterna con Error, de ahí max_over_time.
+      - alert: PodCrashLooping
+        expr: |
+          max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}[5m]) >= 1
+        for: 1m
+        labels:
+          severity: critical
+          catalog: crashloop
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }}) se reinicia en bucle"
+
+      # Incidente 3: el kernel mató el contenedor por superar su límite de memoria
+      - alert: ContainerOOMKilled
+        expr: |
+          kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+          and on (namespace, pod, container) increase(kube_pod_container_status_restarts_total[10m]) > 0
+        labels:
+          severity: warning
+          catalog: oomkilled
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }}) terminado por falta de memoria"
+
+      # Incidente 2 (síntoma): un servicio devuelve errores. La causa puede estar en otro servicio.
+      # Se exige un mínimo de tráfico (0,01 peticiones/s) para no alertar por un error aislado en un
+      # servicio parado. Medido en la tienda: checkout recibe del orden de un pedido cada 30 s.
+      - alert: ServiceErrorRateHigh
+        expr: |
+          (
+            sum by (k8s_namespace_name, service_name) (rate(traces_span_metrics_calls_total{span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[2m]))
+            /
+            sum by (k8s_namespace_name, service_name) (rate(traces_span_metrics_calls_total{span_kind="SPAN_KIND_SERVER"}[2m]))
+          ) > 0.05
+          and sum by (k8s_namespace_name, service_name) (rate(traces_span_metrics_calls_total{span_kind="SPAN_KIND_SERVER"}[2m])) > 0.01
+        for: 2m
+        labels:
+          severity: critical
+          catalog: error-rate
+        annotations:
+          summary: "{{ $labels.service_name }}: {{ $value | humanizePercentage }} de peticiones con error"
+
+      # Incidente 4: el percentil 95 de latencia del servicio supera un segundo
+      - alert: ServiceLatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum by (k8s_namespace_name, service_name, le) (rate(traces_span_metrics_duration_milliseconds_bucket{span_kind="SPAN_KIND_SERVER"}[5m]))
+          ) > 1000
+        for: 5m
+        labels:
+          severity: warning
+          catalog: latency
+        annotations:
+          summary: "{{ $labels.service_name }}: p95 de {{ $value | humanize }} ms"
+
+      # Contexto común: un Deployment lleva tiempo sin todas sus réplicas disponibles
+      - alert: DeploymentReplicasUnavailable
+        expr: kube_deployment_status_replicas_unavailable > 0
+        for: 5m
+        labels:
+          severity: warning
+          catalog: availability
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.deployment }}: {{ $value }} réplicas no disponibles"

@@ -23,3 +23,10 @@ components:
             - path: /
               pathType: Prefix
               port: 8080
+
+# Grafana se quedaba sin memoria (OOMKilled con el límite por defecto de 300 Mi, uso ~260 Mi en
+# reposo): lo detectó la alerta ContainerOOMKilled en el laboratorio el 2026-11-09.
+grafana:
+  resources:
+    limits:
+      memory: 512Mi
