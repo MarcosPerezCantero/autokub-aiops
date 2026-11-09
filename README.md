@@ -127,9 +127,17 @@ make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthr
 - [x] Entorno reproducible del laboratorio (Docker Engine, kubectl, k3d, Helm)
 - [x] Despliegue del producto en Kubernetes con el chart oficial
 - [x] Prototipo vertical: un incidente de extremo a extremo (detección → agente → OPA → ejecución → verificación)
+- [ ] **Versión 0.1 instalable**: CrashLoopBackOff en cualquier clúster ([ADR 0006](docs/adr/0006-producto-instalable.md))
+  - [ ] Configuración en un fichero (namespace, servicios permitidos, límites), sin datos de la demo en el código
+  - [ ] Modo solo propuesta por defecto: muestra la acción y la decisión de OPA sin ejecutarla
+  - [ ] Chart de Helm e imágenes en GHCR; agente, ejecutor y OPA como pods
+  - [ ] Modelo intercambiable vía LiteLLM
+  - [ ] Demo de prueba en un comando (k3d, tienda, sistema e incidente)
+  - [x] Licencia MIT
+  - [ ] Release 0.1 con changelog
 - [ ] Observabilidad: dashboards y alertas para los incidentes del catálogo
 - [ ] Escenarios y runbooks manuales; MTTR de referencia
-- [ ] Manifiestos propios, CI/CD en el fork y GitOps con Argo CD
+- [ ] Manifiestos propios, CI/CD en el fork y GitOps con Argo CD, con remediación compatible con GitOps
 - [ ] Agente: ampliación al resto del catálogo
 - [ ] Evaluación: agente frente a reglas fijas y resolución manual (acierto, MTTR, acciones bloqueadas, coste) y pruebas de prompt injection
 
@@ -141,3 +149,8 @@ make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthr
 | [0002](docs/adr/0002-entorno-laboratorio.md) | Entorno del laboratorio: Ubuntu en WSL2 con Docker Engine |
 | [0004](docs/adr/0004-alcance-del-agente.md) | Alcance del agente: incidentes y acciones permitidas |
 | [0005](docs/adr/0005-prototipo-vertical.md) | Prototipo vertical antes de completar la plataforma |
+| [0006](docs/adr/0006-producto-instalable.md) | Versión instalable antes de ampliar el catálogo |
+
+## Licencia
+
+[MIT](LICENSE)
