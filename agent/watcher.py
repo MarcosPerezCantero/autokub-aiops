@@ -251,7 +251,8 @@ def main():
     if os.environ.get("AUTOKUB_PROPOSER") == "llm":
         import llm_agent
 
-        watcher.propose = lambda incident: llm_agent.propose(incident, emit=watcher.emit)
+        backend = llm_agent.backend_from_config(CONFIG_FILE)
+        watcher.propose = lambda incident: llm_agent.propose(incident, emit=watcher.emit, backend=backend)
     proposer = os.environ.get("AUTOKUB_PROPOSER", "rules")
     print(f"Detector en marcha (proponedor: {proposer}; namespaces: {', '.join(namespaces)})", flush=True)
     while True:

@@ -63,7 +63,7 @@ El sistema opera sobre un fork de la [OpenTelemetry Demo](https://github.com/ope
 | Observabilidad | kube-prometheus-stack, Loki, OpenTelemetry Collector, Jaeger |
 | CI/CD | GitHub Actions (build selectivo por servicio, Trivy, SBOM), GHCR |
 | GitOps | Argo CD |
-| Agente | LangGraph, LiteLLM, Langfuse |
+| Agente | LangGraph; API de Anthropic o compatible con OpenAI (LiteLLM, Ollama…); Langfuse |
 | Políticas | OPA + Rego |
 
 ## Estructura del repositorio
@@ -131,7 +131,7 @@ make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthr
 - [ ] **Versión 0.1 instalable**: CrashLoopBackOff en cualquier clúster ([ADR 0006](docs/adr/0006-producto-instalable.md))
   - [x] Configuración en un fichero (namespaces, servicios permitidos, límites), sin datos de la demo en el código
   - [x] Modo solo propuesta por defecto: muestra la acción y la decisión de OPA sin ejecutarla
-  - [ ] Modelo intercambiable vía LiteLLM
+  - [x] Modelo intercambiable: API de Anthropic o cualquier API compatible con OpenAI (LiteLLM, Ollama, vLLM…)
   - [ ] Chart de Helm e imágenes en GHCR; agente, ejecutor y OPA como pods
   - [ ] Demo de prueba en un comando (k3d, tienda, sistema e incidente)
   - [x] Licencia MIT
@@ -151,6 +151,7 @@ make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthr
 | [0004](docs/adr/0004-alcance-del-agente.md) | Alcance del agente: incidentes y acciones permitidas |
 | [0005](docs/adr/0005-prototipo-vertical.md) | Prototipo vertical antes de completar la plataforma |
 | [0006](docs/adr/0006-producto-instalable.md) | Versión instalable antes de ampliar el catálogo |
+| [0007](docs/adr/0007-interfaz-con-el-modelo.md) | Interfaz con el modelo: API nativa o compatible con OpenAI |
 
 ## Licencia
 

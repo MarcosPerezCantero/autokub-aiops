@@ -28,5 +28,10 @@
     "verify_timeout_seconds": 120,
     "max_attempts": 2,
     "clear_seconds": 60
+  },
+  "model": {
+    "provider": "anthropic",
+    "name": "claude-opus-5-5",
+    "effort": "medium"
   }
 }

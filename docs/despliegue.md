@@ -1,6 +1,6 @@
 # Despliegue en un clúster real
 
-> **Estado: en construcción para la versión 0.1** ([ADR 0006](adr/0006-producto-instalable.md)). Hechos: configuración en un fichero, historial en el Deployment y modo propuesta. Pendientes: LiteLLM, chart de Helm e imágenes.
+> **Estado: en construcción para la versión 0.1** ([ADR 0006](adr/0006-producto-instalable.md)). Hechos: configuración en un fichero, historial en el Deployment, modo propuesta y modelo intercambiable ([ADR 0007](adr/0007-interfaz-con-el-modelo.md)). Pendientes: chart de Helm e imágenes.
 >
 > **Diseño objetivo de la versión 0.1** ([ADR 0006](adr/0006-producto-instalable.md)). Aún no está implementado. Hoy el sistema funciona como laboratorio: los componentes corren como procesos en una máquina local contra la tienda de demostración, tal como describe [arquitectura.md](arquitectura.md). Este documento define cómo se instala y funciona en cualquier clúster de Kubernetes, y guía los pasos de la versión 0.1.
 
@@ -80,8 +80,10 @@ detection:
   max_attempts: 2
 
 model:
-  name: <proveedor>/<modelo>              # cualquier modelo que admita LiteLLM
-  api_key_secret: autokub-llm             # Secret con la clave, en autokub-system
+  provider: openai                        # anthropic | openai (cualquier API compatible: LiteLLM, Ollama, vLLM…)
+  name: <modelo>
+  base_url: http://litellm:4000/v1        # solo con provider: openai
+  api_key_secret: autokub-llm             # Secret con la clave, en autokub-system (opcional en modelos locales)
 ```
 
 De esta misma configuración salen tres cosas, para que no haya copias que mantener a mano:
@@ -161,7 +163,7 @@ Si la aplicación se gestiona con Argo CD o Flux con autocorrección, un rollbac
 | Aplicación | `otel-demo`, fijada en el código | Namespaces y servicios de `autokub.yaml` |
 | Política | Listas fijas en Rego | Reglas genéricas + configuración como `data` |
 | Modo | Siempre ejecuta | Propuesta por defecto |
-| Modelo | SDK de un proveedor | Cualquier modelo vía LiteLLM |
+| Modelo | API de Anthropic o compatible con OpenAI | Igual: el proveedor se elige en la configuración |
 | Eventos | Un fichero compartido | Salida estándar de cada pod |
 | Instalación | Scripts y `make` | `helm install` |
 

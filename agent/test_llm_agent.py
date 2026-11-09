@@ -1,10 +1,23 @@
+import json
+import os
+import tempfile
 import unittest
 from types import SimpleNamespace as NS
 from unittest import mock
 
 import anthropic
 import llm_agent
-from llm_agent import compare_revisions, propose, redact, run_tool, to_action, untrusted
+from llm_agent import (
+    ModelError,
+    OpenAICompatibleBackend,
+    backend_from_config,
+    compare_revisions,
+    propose,
+    redact,
+    run_tool,
+    to_action,
+    untrusted,
+)
 
 INCIDENT = {"id": "inc-1", "namespace": "otel-demo", "deployment": "cart", "pod": "cart-1"}
 
@@ -169,6 +182,105 @@ class ToolsTest(unittest.TestCase):
         with mock.patch.object(llm_agent, "kubectl") as kubectl:
             self.assertTrue(run_tool("list_pods", {}, "--all-namespaces").startswith("error"))
         kubectl.assert_not_called()
+
+
+
+def openai_reply(message, finish="tool_calls"):
+    return {"model": "local-model", "choices": [{"message": message, "finish_reason": finish}],
+            "usage": {"prompt_tokens": 50, "completion_tokens": 5}}
+
+
+def openai_call(name, args, call_id="c1"):
+    return {"id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+
+
+class OpenAICompatibleTest(unittest.TestCase):
+    def backend(self, replies):
+        self.bodies = []
+
+        def post(body):
+            self.bodies.append(json.loads(json.dumps(body)))
+            result = replies.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        return OpenAICompatibleBackend("local-model", "http://llm:4000/v1/", post=post)
+
+    def test_reads_then_proposes(self):
+        undo = {"type": "rollout_undo", "target": "cart", "memory_bytes": None, "reason": "revisión rota"}
+        backend = self.backend([
+            openai_reply({"content": None, "tool_calls": [openai_call("list_pods", {})]}),
+            openai_reply({"content": "Propongo rollback", "tool_calls": [openai_call("propose_action", undo, "c2")]}),
+        ])
+        with mock.patch.object(llm_agent, "run_tool", return_value="<untrusted_data>[]</untrusted_data>"):
+            action = propose({**INCIDENT, "namespace": "tienda"}, backend=backend)
+        self.assertEqual(action, {"type": "rollout_undo", "namespace": "tienda", "target": "cart", "params": {}})
+        first = self.bodies[0]
+        self.assertEqual(first["messages"][0]["role"], "system")
+        self.assertTrue(all(t["function"]["strict"] for t in first["tools"]))
+        follow_up = self.bodies[1]["messages"]
+        self.assertEqual(follow_up[-1], {"role": "tool", "tool_call_id": "c1", "content": "<untrusted_data>[]</untrusted_data>"})
+        self.assertEqual(follow_up[-2]["tool_calls"][0]["id"], "c1")
+
+    def test_errors_escalate(self):
+        for failure in (
+            ModelError("HTTP 500"),
+            {"choices": []},
+            openai_reply({"content": None, "tool_calls": [{"id": "c", "function": {"name": "propose_action", "arguments": "{no json"}}]}),
+            openai_reply({"content": None, "tool_calls": [{"id": "c", "function": {"name": "propose_action", "arguments": "[1]"}}]}),
+            openai_reply({"content": "no", "refusal": "No puedo ayudar"}, finish="stop"),
+            openai_reply({"content": "ni idea"}, finish="stop"),
+        ):
+            with self.subTest(failure=str(failure)[:60]):
+                action = propose(INCIDENT, backend=self.backend([failure]))
+                self.assertEqual(action["type"], "escalate")
+
+    def test_api_key_is_sent_only_when_configured(self):
+        captured = {}
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return json.dumps(openai_reply({"content": "x"}, finish="stop")).encode()
+
+        def urlopen(request, timeout):
+            captured["headers"] = dict(request.header_items())
+            captured["url"] = request.full_url
+            return Response()
+
+        with mock.patch.object(llm_agent.urllib.request, "urlopen", urlopen):
+            OpenAICompatibleBackend("m", "http://llm:4000/v1/", api_key="k").call([])
+            self.assertEqual(captured["headers"].get("Authorization"), "Bearer k")
+            self.assertEqual(captured["url"], "http://llm:4000/v1/chat/completions")
+            OpenAICompatibleBackend("m", "http://ollama:11434/v1").call([])
+            self.assertNotIn("Authorization", captured["headers"])
+
+
+class BackendFromConfigTest(unittest.TestCase):
+    def write(self, config):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        self.addCleanup(os.unlink, tmp.name)
+        json.dump(config, tmp)
+        tmp.close()
+        return tmp.name
+
+    def test_openai_needs_base_url(self):
+        with self.assertRaises(ValueError):
+            backend_from_config(self.write({"model": {"provider": "openai", "name": "m"}}))
+
+    def test_openai_backend(self):
+        backend = backend_from_config(self.write({"model": {"provider": "openai", "name": "m", "base_url": "http://x/v1"}}))
+        self.assertIsInstance(backend, OpenAICompatibleBackend)
+
+    def test_unknown_provider(self):
+        with self.assertRaises(ValueError):
+            backend_from_config(self.write({"model": {"provider": "otro"}}))
 
 
 if __name__ == "__main__":

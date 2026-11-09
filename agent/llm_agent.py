@@ -2,19 +2,25 @@
 
 Misma interfaz que rules.py. Solo lee: lo que proponga pasa por el ejecutor y por OPA.
 Todo lo que lee del clúster se trata como dato no fiable (docs/arquitectura.md).
+El modelo se elige en la configuración: API de Anthropic o cualquier API compatible con
+OpenAI, como el proxy de LiteLLM u Ollama (docs/adr/0007-interfaz-con-el-modelo.md).
 """
 import json
 import os
 import re
 import subprocess
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
 from typing import Any, TypedDict
 
 import anthropic
 from langgraph.graph import END, START, StateGraph
 
 KUBECONFIG = os.environ.get("AUTOKUB_READER_KUBECONFIG", ".local/reader.kubeconfig")
-MODEL = os.environ.get("AUTOKUB_MODEL", "claude-opus-5-5")
-EFFORT = os.environ.get("AUTOKUB_EFFORT", "medium")
+CONFIG_FILE = os.environ.get("AUTOKUB_CONFIG", "config/lab.json")
+DEFAULT_MODEL = {"provider": "anthropic", "name": "claude-opus-5-5", "effort": "medium"}
+MODEL_TIMEOUT_SECONDS = 120
 MAX_STEPS = 8
 MAX_TOOL_OUTPUT = 6000
 MAX_LOG_LINES = 60
@@ -220,6 +226,160 @@ def to_action(proposal, namespace):
     return {"type": proposal["type"], "namespace": namespace, "target": proposal["target"], "params": params}
 
 
+class ModelError(Exception):
+    """Fallo al hablar con el modelo. El agente escala; nunca actúa por defecto."""
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    input: dict
+
+
+@dataclass
+class Reply:
+    """Respuesta del modelo en un formato común a todas las interfaces."""
+
+    assistant: Any
+    texts: list = field(default_factory=list)  # [(tipo, texto)], tipo = thinking | text
+    calls: list = field(default_factory=list)
+    refused: bool = False
+    stop_reason: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model: str | None = None
+
+
+class AnthropicBackend:
+    """API nativa de Anthropic: razonamiento adaptativo, nivel de esfuerzo y modelo de respaldo."""
+
+    def __init__(self, name=DEFAULT_MODEL["name"], effort=DEFAULT_MODEL["effort"], client=None):
+        self.name, self.effort = name, effort
+        self.client = client or anthropic.Anthropic()
+
+    def first(self, prompt):
+        return [{"role": "user", "content": prompt}]
+
+    def call(self, messages):
+        response = self.client.beta.messages.create(
+            model=self.name,
+            max_tokens=16000,
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+            thinking={"type": "adaptive", "display": "summarized"},
+            output_config={"effort": self.effort},
+            system=SYSTEM_PROMPT,
+            tools=TOOLS,
+            messages=messages,
+        )
+        texts = []
+        for block in response.content:
+            if block.type == "thinking" and block.thinking:
+                texts.append(("thinking", block.thinking))
+            elif block.type == "text" and block.text:
+                texts.append(("text", block.text))
+        return Reply(
+            assistant={"role": "assistant", "content": response.content},
+            texts=texts,
+            calls=[ToolCall(b.id, b.name, b.input) for b in response.content if b.type == "tool_use"],
+            refused=response.stop_reason == "refusal",
+            stop_reason=response.stop_reason,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            model=response.model,
+        )
+
+    def tool_results(self, results):
+        content = [{"type": "tool_result", "tool_use_id": call_id, "content": output} for call_id, output in results]
+        return [{"role": "user", "content": content}]
+
+
+class OpenAICompatibleBackend:
+    """Cualquier API compatible con OpenAI (/chat/completions): proxy de LiteLLM, OpenAI, Ollama, vLLM…
+
+    Sin dependencias: una petición HTTP por paso.
+    """
+
+    def __init__(self, name, base_url, api_key=None, post=None):
+        self.name = name
+        self.url = base_url.rstrip("/") + "/chat/completions"
+        self.api_key = api_key
+        self.post = post or self._post
+        self.tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["input_schema"],
+                    "strict": True,
+                },
+            }
+            for tool in TOOLS
+        ]
+
+    def _post(self, body):
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        request = urllib.request.Request(self.url, data=json.dumps(body).encode(), headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=MODEL_TIMEOUT_SECONDS) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            raise ModelError(f"HTTP {error.code}") from error
+        except (OSError, ValueError) as error:
+            raise ModelError(type(error).__name__) from error
+
+    def first(self, prompt):
+        return [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
+
+    def call(self, messages):
+        data = self.post({"model": self.name, "messages": messages, "tools": self.tools, "tool_choice": "auto"})
+        try:
+            choice = data["choices"][0]
+            message = choice["message"]
+            calls = [
+                ToolCall(call["id"], call["function"]["name"], json.loads(call["function"]["arguments"]))
+                for call in message.get("tool_calls") or []
+            ]
+        except (KeyError, IndexError, TypeError, ValueError) as error:
+            raise ModelError("respuesta con formato inesperado") from error
+        if any(not isinstance(call.input, dict) for call in calls):
+            raise ModelError("argumentos de herramienta no válidos")
+        usage = data.get("usage") or {}
+        assistant = {"role": "assistant", "content": message.get("content")}
+        if message.get("tool_calls"):
+            assistant["tool_calls"] = message["tool_calls"]
+        return Reply(
+            assistant=assistant,
+            texts=[("text", message["content"])] if message.get("content") else [],
+            calls=calls,
+            refused=bool(message.get("refusal")),
+            stop_reason=choice.get("finish_reason"),
+            input_tokens=usage.get("prompt_tokens", 0),
+            output_tokens=usage.get("completion_tokens", 0),
+            model=data.get("model", self.name),
+        )
+
+    def tool_results(self, results):
+        return [{"role": "tool", "tool_call_id": call_id, "content": output} for call_id, output in results]
+
+
+def backend_from_config(path=CONFIG_FILE):
+    """Crea la interfaz con el modelo según la sección "model" de la configuración."""
+    with open(path, encoding="utf-8") as file:
+        settings = {**DEFAULT_MODEL, **json.load(file).get("model", {})}
+    if settings["provider"] == "anthropic":
+        return AnthropicBackend(settings["name"], settings["effort"])
+    if settings["provider"] == "openai":
+        if not settings.get("base_url"):
+            raise ValueError("el proveedor openai necesita base_url")
+        return OpenAICompatibleBackend(settings["name"], settings["base_url"], os.environ.get("AUTOKUB_LLM_API_KEY"))
+    raise ValueError(f"proveedor de modelo no válido: {settings['provider']!r}")
+
+
 class State(TypedDict):
     messages: list[dict[str, Any]]
     pending: list[Any]
@@ -231,46 +391,33 @@ class State(TypedDict):
     model: str | None
 
 
-def build_graph(client, emit, incident_id, namespace):
+def build_graph(backend, emit, incident_id, namespace):
     def think(state):
-        response = client.beta.messages.create(
-            model=MODEL,
-            max_tokens=16000,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            thinking={"type": "adaptive", "display": "summarized"},
-            output_config={"effort": EFFORT},
-            system=SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=state["messages"],
-        )
+        reply = backend.call(state["messages"])
         update = {
-            "messages": state["messages"] + [{"role": "assistant", "content": response.content}],
+            "messages": state["messages"] + [reply.assistant],
             "pending": [],
             "steps": state["steps"] + 1,
-            "input_tokens": state["input_tokens"] + response.usage.input_tokens,
-            "output_tokens": state["output_tokens"] + response.usage.output_tokens,
-            "model": response.model,
+            "input_tokens": state["input_tokens"] + reply.input_tokens,
+            "output_tokens": state["output_tokens"] + reply.output_tokens,
+            "model": reply.model,
         }
-        for block in response.content:
-            if block.type == "thinking" and block.thinking:
-                emit(incident_id, "agent_thinking", block.thinking, component="agent")
-            elif block.type == "text" and block.text:
-                emit(incident_id, "agent_text", block.text, component="agent")
-            elif block.type == "tool_use" and block.name != "propose_action":
-                emit(incident_id, "agent_tool_call", block.name, component="agent", args=block.input)
-        calls = [block for block in response.content if block.type == "tool_use"]
-        proposal = next((call.input for call in calls if call.name == "propose_action"), None)
-        if response.stop_reason == "refusal":
+        for kind, text in reply.texts:
+            emit(incident_id, "agent_thinking" if kind == "thinking" else "agent_text", text, component="agent")
+        for call in reply.calls:
+            if call.name != "propose_action":
+                emit(incident_id, "agent_tool_call", call.name, component="agent", args=call.input)
+        proposal = next((call.input for call in reply.calls if call.name == "propose_action"), None)
+        if reply.refused:
             update["failure"] = "el modelo rechazó la petición"
         elif proposal is not None:
             update["proposal"] = proposal
-        elif not calls:
-            update["failure"] = f"el modelo terminó sin proponer una acción ({response.stop_reason})"
+        elif not reply.calls:
+            update["failure"] = f"el modelo terminó sin proponer una acción ({reply.stop_reason})"
         elif update["steps"] >= MAX_STEPS:
             update["failure"] = "límite de pasos alcanzado"
         else:
-            update["pending"] = calls
+            update["pending"] = reply.calls
         return update
 
     def tools(state):
@@ -278,8 +425,8 @@ def build_graph(client, emit, incident_id, namespace):
         for call in state["pending"]:
             output = run_tool(call.name, call.input, namespace)
             emit(incident_id, "agent_tool_result", output[:MAX_EVENT_RESULT], component="agent", tool=call.name)
-            results.append({"type": "tool_result", "tool_use_id": call.id, "content": output})
-        return {"messages": state["messages"] + [{"role": "user", "content": results}], "pending": []}
+            results.append((call.id, output))
+        return {"messages": state["messages"] + backend.tool_results(results), "pending": []}
 
     graph = StateGraph(State)
     graph.add_node("think", think)
@@ -290,12 +437,11 @@ def build_graph(client, emit, incident_id, namespace):
     return graph.compile()
 
 
-def diagnose(incident, client=None, emit=lambda *args, **kwargs: None):
-    client = client or anthropic.Anthropic()
+def diagnose(incident, backend, emit=lambda *args, **kwargs: None):
     prompt = f"Incidente detectado:\n{untrusted(json.dumps(incident, ensure_ascii=False))}"
-    return build_graph(client, emit, incident.get("id"), incident.get("namespace")).invoke(
+    return build_graph(backend, emit, incident.get("id"), incident.get("namespace")).invoke(
         {
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": backend.first(prompt),
             "pending": [],
             "proposal": None,
             "failure": None,
@@ -308,12 +454,12 @@ def diagnose(incident, client=None, emit=lambda *args, **kwargs: None):
     )
 
 
-def propose(incident, emit=None, client=None):
+def propose(incident, emit=None, client=None, backend=None):
     """Devuelve la acción propuesta. Si el agente falla, escala: nunca actúa por defecto."""
     emit = emit or (lambda *args, **kwargs: None)
     try:
-        result = diagnose(incident, client, emit)
-    except (anthropic.AnthropicError, subprocess.SubprocessError, ValueError) as error:
+        result = diagnose(incident, backend or AnthropicBackend(client=client), emit)
+    except (anthropic.AnthropicError, ModelError, subprocess.SubprocessError, ValueError) as error:
         summary = f"{incident.get('deployment')}: error del agente ({type(error).__name__})"
         emit(incident.get("id"), "agent_failed", summary, component="agent")
         return {"type": "escalate", "params": {"summary": summary}}
