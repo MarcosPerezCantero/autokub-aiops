@@ -1,8 +1,5 @@
 # Solo entra en las imágenes lo que copian los Dockerfile
-.git
-.venv
-.local
-.claude
+.*
 **/__pycache__
 **/test_*.py
 docs

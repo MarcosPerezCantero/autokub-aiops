@@ -199,10 +199,14 @@ class Watcher:
 
     def remediate(self, state, incident):
         state["incident"] = incident
-        action = self.propose({**incident, "id": state["id"], "previous_attempts": list(state["attempts"])})
+        # Si el ejecutor no respondió, se reenvía la misma acción: no se vuelve a consultar al modelo
+        action = state.pop("unsent_action", None) or self.propose(
+            {**incident, "id": state["id"], "previous_attempts": list(state["attempts"])}
+        )
         result = self.send({"incident_id": state["id"], "action": action})
         status = result.get("status")
         if status == "unreachable":
+            state["unsent_action"] = action
             return  # Se reintenta en la siguiente vuelta
         if status == "executed":
             state["attempts"].append({"action": action["type"], "target": action.get("target")})

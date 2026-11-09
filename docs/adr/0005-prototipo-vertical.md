@@ -23,7 +23,7 @@ Simplificaciones admitidas, cada una con su sustitución prevista:
 | Trazas del agente en logs estructurados | Langfuse |
 | SDK de Anthropic directo | LiteLLM como pasarela |
 
-Lo que **no** se simplifica es la frontera de seguridad: denegación por defecto, separación entre quien propone y quien ejecuta, y tests de las políticas. Es la tesis del proyecto, y añadirla después invalidaría lo aprendido.
+Lo que **no** se simplifica es la frontera de seguridad: denegación por defecto, separación entre quien propone y quien ejecuta, y tests de las políticas. Es la premisa del proyecto, y añadirla después invalidaría lo aprendido.
 
 ### Pasos
 1. Recuperar el clúster y añadir OPA al bootstrap.

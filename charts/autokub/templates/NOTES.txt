@@ -1,4 +1,9 @@
 autokub {{ .Chart.AppVersion }} instalado en modo {{ .Values.mode }}.
+{{- if not .Values.networkPolicy.enabled }}
+
+AVISO: networkPolicy.enabled=false. Cualquier pod del clúster puede enviar propuestas al ejecutor.
+OPA sigue autorizando cada acción, pero se pierde una barrera.
+{{- end }}
 {{- if eq .Values.mode "propose" }}
 
 Modo propuesta: detecta y propone, pero no modifica el clúster (no tiene permisos para hacerlo).

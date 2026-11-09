@@ -219,7 +219,15 @@ def run_tool(name, args, namespace):
 
 
 def to_action(proposal, namespace):
-    """Traduce la propuesta del modelo. El namespace no lo elige el modelo, sino el incidente."""
+    """Traduce la propuesta del modelo. El namespace no lo elige el modelo, sino el incidente.
+
+    Las interfaces compatibles con OpenAI no siempre imponen el esquema: una propuesta sin
+    type o target válidos es un ValueError, y propose() la convierte en escalado.
+    """
+    if not isinstance(proposal, dict) or not isinstance(proposal.get("type"), str):
+        raise ValueError("propuesta sin tipo")
+    if proposal["type"] != "escalate" and not isinstance(proposal.get("target"), str):
+        raise ValueError("propuesta sin objetivo")
     if proposal["type"] == "escalate":
         return {"type": "escalate", "params": {"summary": proposal.get("reason", "")}}
     params = {}
@@ -476,6 +484,12 @@ def propose(incident, emit=None, client=None, backend=None):
         summary = f"{incident.get('deployment')}: {result['failure']}"
         emit(incident.get("id"), "agent_failed", summary, component="agent", **usage)
         return {"type": "escalate", "params": {"summary": summary}}
+    try:
+        action = to_action(result["proposal"], incident["namespace"])
+    except (KeyError, TypeError, ValueError) as error:
+        summary = f"{incident.get('deployment')}: propuesta no válida ({error})"
+        emit(incident.get("id"), "agent_failed", summary, component="agent", **usage)
+        return {"type": "escalate", "params": {"summary": summary}}
     emit(
         incident.get("id"),
         "agent_diagnosis",
@@ -485,4 +499,4 @@ def propose(incident, emit=None, client=None, backend=None):
         target=result["proposal"].get("target"),
         **usage,
     )
-    return to_action(result["proposal"], incident["namespace"])
+    return action

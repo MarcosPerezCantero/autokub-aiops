@@ -285,6 +285,29 @@ class NamespacesTest(unittest.TestCase):
         self.assertEqual(len(self.sent), 1)
 
 
+class UnreachableExecutorTest(unittest.TestCase):
+    def test_resends_same_action_without_asking_the_model_again(self):
+        proposals, sent = [], []
+        replies = [{"status": "unreachable"}, {"status": "unreachable"}, {"status": "executed"}]
+
+        def propose(incident):
+            proposals.append(incident)
+            return {"type": "rollout_undo", "namespace": "otel-demo", "target": "cart", "params": {}}
+
+        def send(payload):
+            sent.append(payload)
+            return replies.pop(0)
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        watcher = Watcher(propose=propose, send=send, events_file=os.path.join(tmp.name, "e.jsonl"), clock=lambda: 0)
+        for _ in range(3):
+            watcher.tick(FAILING, REPLICA_SETS, BROKEN, "otel-demo")
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(len(sent), 3)
+        self.assertEqual(watcher.active[("otel-demo", "cart")]["phase"], "verifying")
+
+
 class ProposeModeTest(unittest.TestCase):
     def setUp(self):
         self.sent = []

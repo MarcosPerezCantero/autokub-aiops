@@ -145,6 +145,10 @@ Se mantienen todas las garantías de [arquitectura.md](arquitectura.md#frontera-
 | Una réplica de cada componente | Dos detectores propondrían dos veces la misma acción. El límite de frecuencia lo cortaría, pero es mejor no provocarlo |
 | Contenedores sin root, sistema de ficheros de solo lectura | Reduce lo que puede hacer un proceso comprometido |
 
+## Datos que salen del clúster
+
+El agente envía al proveedor del modelo lo que lee para diagnosticar: estado de los pods, eventos, diferencias entre revisiones y las últimas líneas de log. Los valores de variables con nombres sensibles (`PASSWORD`, `TOKEN`, `KEY`…) y las credenciales dentro de URLs se censuran, pero un log puede contener otros datos. Si eso no es aceptable, usa un modelo local con `provider: openai` (Ollama, vLLM). En ese caso, `base_url` debe ser `https://` o una dirección interna del clúster: con `http://` hacia fuera, la clave viajaría sin cifrar.
+
 ## Trazabilidad
 
 En el laboratorio, los tres procesos escriben en el mismo fichero de eventos. En el clúster no comparten disco, así que cada componente escribe sus eventos JSON, con el mismo formato y el mismo `incident_id`, en su salida estándar. Se consultan con `kubectl logs` y los recoge cualquier sistema de logs que tenga el clúster (Loki, Elasticsearch, CloudWatch…).

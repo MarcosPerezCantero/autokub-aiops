@@ -10,7 +10,7 @@ DEMO_VALUES := deploy/otel-demo/values.yaml
 # Python 3.12 para el venv del agente (en macOS: make venv PYTHON=python3.12)
 PYTHON ?= python3
 
-.PHONY: up stop down status demo demo-down try try-incident try-events try-execute try-reset test lint chart-test chart-sync images policies-test venv agent-test auth prototype prototype-llm
+.PHONY: up stop down status demo demo-down try try-check try-incident try-events try-execute try-reset test lint chart-test chart-sync images policies-test venv agent-test auth prototype prototype-llm
 
 up: ## Crea el clúster (idempotente)
 	@if k3d cluster list $(CLUSTER) >/dev/null 2>&1; then \
@@ -81,19 +81,25 @@ images: ## Construye las imágenes del agente y del ejecutor
 try: ## Prueba autokub en un clúster local en un solo comando
 	./demo/try.sh
 
-try-incident: ## Provoca un CrashLoopBackOff en product-catalog
+# Los objetivos try-* solo actúan sobre el clúster de la demo
+TRY_CONTEXT := k3d-autokub
+try-check:
+	@test "$$(kubectl config current-context)" = "$(TRY_CONTEXT)" || \
+		{ echo "El contexto de kubectl no es $(TRY_CONTEXT): ejecuta make try o kubectl config use-context $(TRY_CONTEXT)"; exit 1; }
+
+try-incident: try-check ## Provoca un CrashLoopBackOff en product-catalog
 	./scenarios/crashloop/inject.sh
 
-try-events: ## Eventos de autokub en directo (Ctrl+C para salir)
+try-events: try-check ## Eventos de autokub en directo (Ctrl+C para salir)
 	kubectl -n autokub-system logs -f --prefix --max-log-requests=4 -l app.kubernetes.io/name=autokub --all-containers \
 		| python3 demo/events.py
 
-try-execute: ## Pasa autokub a modo ejecución
-	helm upgrade autokub charts/autokub -n autokub-system --reuse-values --set mode=execute
+try-execute: try-check ## Pasa autokub a modo ejecución
+	helm upgrade autokub charts/autokub --kube-context $(TRY_CONTEXT) -n autokub-system --reuse-values --set mode=execute
 
-try-reset: ## Revierte el incidente y vuelve a modo propuesta
+try-reset: try-check ## Revierte el incidente y vuelve a modo propuesta
 	./scenarios/crashloop/revert.sh || true
-	helm upgrade autokub charts/autokub -n autokub-system --reuse-values --set mode=propose
+	helm upgrade autokub charts/autokub --kube-context $(TRY_CONTEXT) -n autokub-system --reuse-values --set mode=propose
 
 auth: ## Aplica el RBAC generado desde config/lab.json y crea los kubeconfig temporales (24 h)
 	./infra/service-accounts.sh

@@ -231,6 +231,10 @@ class OpenAICompatibleTest(unittest.TestCase):
             openai_reply({"content": None, "tool_calls": [{"id": "c", "function": {"name": "propose_action", "arguments": "[1]"}}]}),
             openai_reply({"content": "no", "refusal": "No puedo ayudar"}, finish="stop"),
             openai_reply({"content": "ni idea"}, finish="stop"),
+            # Un backend que no impone el esquema puede devolver propuestas incompletas
+            openai_reply({"content": None, "tool_calls": [openai_call("propose_action", {"target": "cart"})]}),
+            openai_reply({"content": None, "tool_calls": [openai_call("propose_action", {"type": "rollout_undo"})]}),
+            openai_reply({"content": None, "tool_calls": [openai_call("propose_action", {"type": 5, "target": "cart"})]}),
         ):
             with self.subTest(failure=str(failure)[:60]):
                 action = propose(INCIDENT, backend=self.backend([failure]))

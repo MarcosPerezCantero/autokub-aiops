@@ -8,6 +8,8 @@ set -euo pipefail
 
 NAMESPACE=autokub-system
 TAG=dev
+# Todo va contra el clúster de la demo, nunca contra el contexto que esté activo
+CONTEXT=k3d-autokub
 VALUES=.local/try-values.json
 
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
@@ -20,10 +22,12 @@ docker info >/dev/null 2>&1 || { echo "Docker no está en marcha" >&2; exit 1; }
 mkdir -p .local
 step "1/5 Clúster k3d"
 make --no-print-directory up
+kubectl config use-context "$CONTEXT" >/dev/null
+[[ "$(kubectl config current-context)" == "$CONTEXT" ]] || { echo "No se pudo seleccionar $CONTEXT" >&2; exit 1; }
 
 step "2/5 Tienda de demostración (puede tardar unos minutos la primera vez)"
 make --no-print-directory demo >/dev/null
-kubectl -n otel-demo wait --for=condition=Available deployment --all --timeout=600s >/dev/null
+kubectl --context "$CONTEXT" -n otel-demo wait --for=condition=Available deployment --all --timeout=600s >/dev/null
 echo "Tienda lista en http://localhost:8080"
 
 step "3/5 Imágenes de autokub"
@@ -32,14 +36,16 @@ k3d image import -c autokub "ghcr.io/marcosperezcantero/autokub-agent:$TAG" \
   "ghcr.io/marcosperezcantero/autokub-executor:$TAG" >/dev/null
 
 step "4/5 Modelo"
-kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl --context "$CONTEXT" create namespace "$NAMESPACE" --dry-run=client -o yaml \
+  | kubectl --context "$CONTEXT" apply -f - >/dev/null
 proposer=rules
 if [[ -f .local/anthropic.env ]]; then
   # La clave se lee aquí y solo llega al Secret que usa el pod del agente
-  key=$(sed -n 's/^ANTHROPIC_API_KEY=//p' .local/anthropic.env | tr -d '"'"'"'')
+  key=$(sed -n 's/^\(export \)\{0,1\}ANTHROPIC_API_KEY=//p' .local/anthropic.env | tr -d '"'"'"'\r ')
   if [[ -n "$key" ]]; then
-    kubectl -n "$NAMESPACE" create secret generic autokub-llm --from-literal=api-key="$key" \
-      --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    # Por la entrada estándar: la clave no aparece en la lista de procesos
+    printf %s "$key" | kubectl --context "$CONTEXT" -n "$NAMESPACE" create secret generic autokub-llm \
+      --from-file=api-key=/dev/stdin --dry-run=client -o yaml | kubectl --context "$CONTEXT" apply -f - >/dev/null
     proposer=llm
   fi
 fi
@@ -52,9 +58,9 @@ config = json.load(open("config/lab.json"))
 print(json.dumps({"mode": "propose", "proposer": sys.argv[1], "namespaces": config["namespaces"],
                   "image": {"tag": sys.argv[2], "pullPolicy": "Never"}}))
 PY
-helm upgrade --install autokub charts/autokub -n "$NAMESPACE" -f "$VALUES" >/dev/null
-kubectl -n "$NAMESPACE" rollout status deploy/autokub-executor --timeout=180s >/dev/null
-kubectl -n "$NAMESPACE" rollout status deploy/autokub-agent --timeout=180s >/dev/null
+helm upgrade --install autokub charts/autokub --kube-context "$CONTEXT" -n "$NAMESPACE" -f "$VALUES" >/dev/null
+kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deploy/autokub-executor --timeout=180s >/dev/null
+kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deploy/autokub-agent --timeout=180s >/dev/null
 
 cat <<MSG
 

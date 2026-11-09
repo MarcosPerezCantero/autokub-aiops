@@ -42,7 +42,7 @@ spec:
           resources: {{- toYaml .Values.resources.executor | nindent 12 }}
           {{- include "autokub.containerSecurity" . | nindent 10 }}
         - name: opa
-          image: {{ .Values.opa.image }}
+          image: {{ .Values.opa.image | quote }}
           args:
             - run
             - --server

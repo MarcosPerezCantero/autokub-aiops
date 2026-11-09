@@ -93,6 +93,11 @@ class ChartTest(unittest.TestCase):
             {"namespaces": LAB["namespaces"], "mode": "yolo"},
             {"namespaces": {"a": {"targets": []}}},
             {"namespaces": LAB["namespaces"], "model": {"provider": "openai", "name": "m"}},
+            {"namespaces": {"bad:ns\nkind: ClusterRole": {"targets": ["a"]}}},
+            {"namespaces": {"Tienda": {"targets": ["a"]}}},
+            {"namespaces": {"tienda": {"targets": "api"}}},
+            {"namespaces": {"tienda": {"targets": ["api", "x; rm"]}}},
+            {"namespaces": {"tienda": {"targets": [5]}}},
         ):
             with self.subTest(values=values):
                 self.assertNotEqual(render(values, expect_error=True).returncode, 0)

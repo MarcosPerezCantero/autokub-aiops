@@ -31,15 +31,15 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: AUTOKUB_PROPOSER
-              value: {{ .Values.proposer }}
+              value: {{ .Values.proposer | quote }}
             - name: AUTOKUB_EXECUTOR_URL
               value: http://autokub-executor.{{ .Release.Namespace }}.svc:8090/actions
             # La clave solo llega a este pod, que no tiene permisos de escritura
             - name: {{ if eq .Values.model.provider "anthropic" }}ANTHROPIC_API_KEY{{ else }}AUTOKUB_LLM_API_KEY{{ end }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.model.apiKeySecret }}
-                  key: {{ .Values.model.apiKeySecretKey }}
+                  name: {{ .Values.model.apiKeySecret | quote }}
+                  key: {{ .Values.model.apiKeySecretKey | quote }}
                   optional: true
           volumeMounts:
             - name: config
