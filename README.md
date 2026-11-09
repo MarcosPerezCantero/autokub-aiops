@@ -32,6 +32,41 @@ flowchart LR
 - **Verificación posterior:** cada remediación se comprueba contra las métricas antes de darla por buena.
 - **Human-on-the-loop:** las personas definen las políticas y supervisan; no ejecutan comandos.
 
+## Pruébalo en tu máquina
+
+Requisitos: Docker, [k3d](https://k3d.io), kubectl y helm, y unos 6 GB de RAM libres.
+
+```bash
+git clone https://github.com/MarcosPerezCantero/autokub-aiops.git && cd autokub-aiops
+make try            # clúster k3d + tienda de demostración + autokub en modo propuesta (unos 4 minutos)
+make try-incident   # provoca un CrashLoopBackOff en product-catalog
+make try-events     # qué detecta, qué propone y qué decide OPA, en directo
+make try-execute    # pasa a modo ejecución: autokub aplica el rollback que OPA autoriza
+make down           # borra el clúster
+```
+
+Sin clave de API funciona con un proponedor de reglas fijas. Para usar el agente LLM, crea `.local/anthropic.env` con `ANTHROPIC_API_KEY=...` antes de `make try`.
+
+## Instálalo en tu clúster
+
+autokub se instala con Helm y empieza en **modo propuesta**: detecta, propone y consulta a OPA, pero no modifica nada ni tiene permisos para hacerlo.
+
+```bash
+kubectl create namespace autokub-system
+kubectl -n autokub-system create secret generic autokub-llm --from-literal=api-key=<clave>
+
+cat > autokub.yaml <<'YAML'
+namespaces:
+  tienda:                          # tu namespace
+    targets: [api, web, worker]    # Deployments sobre los que puede actuar
+YAML
+
+helm install autokub oci://ghcr.io/marcosperezcantero/charts/autokub --version 0.1.0 \
+  -n autokub-system -f autokub.yaml
+```
+
+Cuando sus propuestas te convenzan, `--set mode=execute` le da permiso para aplicar, solo sobre esos Deployments. Detalle de componentes, permisos y configuración en [docs/despliegue.md](docs/despliegue.md).
+
 ## Catálogo de incidentes
 
 El agente opera sobre un catálogo cerrado, con prioridad para los casos en que síntoma y causa están en servicios distintos:
@@ -132,8 +167,8 @@ make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthr
   - [x] Configuración en un fichero (namespaces, servicios permitidos, límites), sin datos de la demo en el código
   - [x] Modo solo propuesta por defecto: muestra la acción y la decisión de OPA sin ejecutarla
   - [x] Modelo intercambiable: API de Anthropic o cualquier API compatible con OpenAI (LiteLLM, Ollama, vLLM…)
-  - [ ] Chart de Helm e imágenes en GHCR; agente, ejecutor y OPA como pods
-  - [ ] Demo de prueba en un comando (k3d, tienda, sistema e incidente)
+  - [x] Chart de Helm e imágenes; agente, ejecutor y OPA como pods
+  - [x] Demo de prueba en un comando (k3d, tienda, sistema e incidente)
   - [x] Licencia MIT
   - [ ] Release 0.1 con changelog
 - [ ] Observabilidad: dashboards y alertas para los incidentes del catálogo

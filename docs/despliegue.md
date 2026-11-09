@@ -1,6 +1,6 @@
 # Despliegue en un clúster real
 
-> **Estado: en construcción para la versión 0.1** ([ADR 0006](adr/0006-producto-instalable.md)). Hechos: configuración en un fichero, historial en el Deployment, modo propuesta y modelo intercambiable ([ADR 0007](adr/0007-interfaz-con-el-modelo.md)). Pendientes: chart de Helm e imágenes.
+> **Estado: en construcción para la versión 0.1** ([ADR 0006](adr/0006-producto-instalable.md)). Hechos: configuración en un fichero, historial en el Deployment, modo propuesta y modelo intercambiable ([ADR 0007](adr/0007-interfaz-con-el-modelo.md)). También el chart de Helm y las imágenes, probados en k3d. Pendiente: publicar la release 0.1.
 >
 > **Diseño objetivo de la versión 0.1** ([ADR 0006](adr/0006-producto-instalable.md)). Aún no está implementado. Hoy el sistema funciona como laboratorio: los componentes corren como procesos en una máquina local contra la tienda de demostración, tal como describe [arquitectura.md](arquitectura.md). Este documento define cómo se instala y funciona en cualquier clúster de Kubernetes, y guía los pasos de la versión 0.1.
 
@@ -110,7 +110,7 @@ En modo propuesta el chart **no concede permisos de escritura**: aunque el ejecu
 
 ## Instalación
 
-> Previsto para la versión 0.1. El chart y las imágenes todavía no están publicados.
+> Se publican con la release 0.1. Mientras tanto, `make try` instala el chart desde el repositorio en un clúster local.
 
 ```bash
 # 1. Clave del modelo, solo para el pod del agente
@@ -140,7 +140,8 @@ Se mantienen todas las garantías de [arquitectura.md](arquitectura.md#frontera-
 | Sin acceso a Secrets | Ni el agente ni el ejecutor pueden leer Secrets por la API. La clave del modelo llega al agente montada por el kubelet, y el ejecutor nunca la ve |
 | Escritura solo en modo `execute` | En modo propuesta el sistema no puede modificar el clúster |
 | OPA como sidecar | La política no es accesible desde la red |
-| NetworkPolicy | El ejecutor solo acepta tráfico del pod del agente; el agente solo sale a la API de Kubernetes y al proveedor del modelo; el ejecutor solo a la API |
+| NetworkPolicy | El ejecutor solo acepta tráfico del pod del agente (comprobado: un pod de otro namespace recibe conexión rechazada). Restringir también la salida depende de la red de cada clúster y queda a quien instala |
+| `enableServiceLinks: false` | Kubernetes no inyecta variables de los Services, que llegaron a pisar la configuración del ejecutor |
 | Una réplica de cada componente | Dos detectores propondrían dos veces la misma acción. El límite de frecuencia lo cortaría, pero es mejor no provocarlo |
 | Contenedores sin root, sistema de ficheros de solo lectura | Reduce lo que puede hacer un proceso comprometido |
 
@@ -148,7 +149,7 @@ Se mantienen todas las garantías de [arquitectura.md](arquitectura.md#frontera-
 
 En el laboratorio, los tres procesos escriben en el mismo fichero de eventos. En el clúster no comparten disco, así que cada componente escribe sus eventos JSON, con el mismo formato y el mismo `incident_id`, en su salida estándar. Se consultan con `kubectl logs` y los recoge cualquier sistema de logs que tenga el clúster (Loki, Elasticsearch, CloudWatch…).
 
-La vista, si se instala, reconstruye el recorrido de cada incidente leyendo los logs de los pods de `autokub-system`, con permiso de solo lectura sobre ese namespace y nada más.
+`make try-events` los muestra en directo, una línea por paso. La vista web sigue siendo una herramienta del laboratorio y no se instala con el chart en la versión 0.1.
 
 ## GitOps
 
