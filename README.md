@@ -39,9 +39,10 @@ Requisitos: Docker, [k3d](https://k3d.io), kubectl y helm, y unos 6 GB de RAM li
 ```bash
 git clone https://github.com/MarcosPerezCantero/autokub-aiops.git && cd autokub-aiops
 make try            # clúster k3d + tienda de demostración + autokub en modo propuesta (unos 4 minutos)
+make try-panel      # panel de operación en http://localhost:8091 (déjalo abierto en otra terminal)
 make try-incident   # provoca un CrashLoopBackOff en product-catalog
-make try-events     # qué detecta, qué propone y qué decide OPA, en directo
-make try-execute    # pasa a modo ejecución: autokub aplica el rollback que OPA autoriza
+make try-approve    # modo aprobación: el rollback que OPA autoriza espera a que lo apruebes en el panel
+make try-execute    # modo ejecución: autokub aplica el rollback que OPA autoriza sin esperar
 make down           # borra el clúster
 ```
 
@@ -61,11 +62,11 @@ namespaces:
     targets: [api, web, worker]    # Deployments sobre los que puede actuar
 YAML
 
-helm install autokub oci://ghcr.io/marcosperezcantero/charts/autokub --version 0.1.0 \
+helm install autokub oci://ghcr.io/marcosperezcantero/charts/autokub --version 0.2.0 \
   -n autokub-system -f autokub.yaml
 ```
 
-Cuando sus propuestas te convenzan, `--set mode=execute` le da permiso para aplicar, solo sobre esos Deployments. Detalle de componentes, permisos y configuración en [docs/despliegue.md](docs/despliegue.md).
+Para ver qué hace, abre el panel de operación con `kubectl -n autokub-system port-forward deploy/autokub-panel 8091`. Cuando sus propuestas te convenzan, `--set mode=approve` le deja aplicar lo que apruebes en el panel, y `--set mode=execute`, lo que OPA autorice sin esperar. En ambos casos solo sobre esos Deployments. Detalle de componentes, permisos y configuración en [docs/despliegue.md](docs/despliegue.md).
 
 ## Catálogo de incidentes
 
@@ -111,7 +112,7 @@ autokub-aiops/
 ├── agent/       # agente LangGraph
 ├── policies/    # políticas Rego y sus tests
 ├── executor/    # ejecutor: único componente con permisos de escritura
-├── viewer/      # vista web del flujo, de solo lectura
+├── panel/       # panel de operación: incidentes, decisiones de OPA, aprobaciones y chat
 ├── scenarios/   # scripts que provocan cada incidente
 ├── runbooks/    # resolución manual de cada incidente
 └── docs/adr/    # registros de decisiones de arquitectura
@@ -147,7 +148,7 @@ make status   # estado del clúster
 make stop     # para el clúster sin borrarlo (make up lo reanuda)
 make demo     # despliega la tienda (chart oficial + deploy/otel-demo/values.yaml) en http://localhost:8080
 make down     # destruye el clúster
-make test           # todos los tests, sin clúster (políticas, ejecutor, agente y vista)
+make test           # todos los tests, sin clúster (políticas, ejecutor, agente, panel, RBAC, chart y alertas)
 make lint           # comprobaciones de Rego y Python
 make policies-test  # comprueba las políticas Rego y ejecuta sus tests
 make venv           # crea el entorno de Python del agente
@@ -155,7 +156,7 @@ make agent-test     # ejecuta los tests del ejecutor y del agente
 make auth           # crea las cuentas del lector y del ejecutor (tokens de 24 h)
 make prototype      # arranca la cadena con reglas fijas
 make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthropic.env)
-                    # vista del flujo en http://localhost:8091
+                    # panel en http://localhost:8091
 ```
 
 ## Hoja de ruta
@@ -163,17 +164,18 @@ make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthr
 - [x] Entorno reproducible del laboratorio (Docker Engine, kubectl, k3d, Helm)
 - [x] Despliegue del producto en Kubernetes con el chart oficial
 - [x] Prototipo vertical: un incidente de extremo a extremo (detección → agente → OPA → ejecución → verificación)
-- [ ] **Versión 0.1 instalable**: CrashLoopBackOff en cualquier clúster ([ADR 0006](docs/adr/0006-producto-instalable.md))
+- [x] **Versión 0.1 instalable**: CrashLoopBackOff en cualquier clúster ([ADR 0006](docs/adr/0006-producto-instalable.md))
   - [x] Configuración en un fichero (namespaces, servicios permitidos, límites), sin datos de la demo en el código
   - [x] Modo solo propuesta por defecto: muestra la acción y la decisión de OPA sin ejecutarla
   - [x] Modelo intercambiable: API de Anthropic o cualquier API compatible con OpenAI (LiteLLM, Ollama, vLLM…)
   - [x] Chart de Helm e imágenes; agente, ejecutor y OPA como pods
   - [x] Demo de prueba en un comando (k3d, tienda, sistema e incidente)
   - [x] Licencia MIT
-  - [ ] Release 0.1 con changelog
+  - [x] Release 0.1 con changelog
 - [x] Observabilidad: alertas del catálogo con tests unitarios y panel de Grafana
+- [x] **Versión 0.2**: panel de operación, modo aprobación y chat de solo lectura con el agente ([ADR 0009](docs/adr/0009-panel-de-operacion.md))
 - [ ] Escenarios y runbooks manuales; MTTR de referencia
-- [ ] Manifiestos propios, CI/CD en el fork y GitOps con Argo CD, con remediación compatible con GitOps
+- [ ] Manifiestos propios, CI/CD en el fork y GitOps con Argo CD, con remediación compatible con GitOps ([ADR 0003](docs/adr/0003-remediacion-con-gitops.md))
 - [ ] Agente: ampliación al resto del catálogo
 - [ ] Evaluación: agente frente a reglas fijas y resolución manual (acierto, MTTR, acciones bloqueadas, coste) y pruebas de prompt injection
 
@@ -183,11 +185,13 @@ make prototype-llm  # arranca la cadena con el agente LLM (requiere .local/anthr
 |-----|----------|
 | [0001](docs/adr/0001-producto-objetivo.md) | Producto objetivo: fork de la OpenTelemetry Demo |
 | [0002](docs/adr/0002-entorno-laboratorio.md) | Entorno del laboratorio: Ubuntu en WSL2 con Docker Engine |
+| [0003](docs/adr/0003-remediacion-con-gitops.md) | Remediación con GitOps: rollback inmediato por la API y propuesta de cambio al repositorio |
 | [0004](docs/adr/0004-alcance-del-agente.md) | Alcance del agente: incidentes y acciones permitidas |
 | [0005](docs/adr/0005-prototipo-vertical.md) | Prototipo vertical antes de completar la plataforma |
 | [0006](docs/adr/0006-producto-instalable.md) | Versión instalable antes de ampliar el catálogo |
 | [0007](docs/adr/0007-interfaz-con-el-modelo.md) | Interfaz con el modelo: API nativa o compatible con OpenAI |
 | [0008](docs/adr/0008-observabilidad.md) | Observabilidad sobre la pila que ya trae la aplicación |
+| [0009](docs/adr/0009-panel-de-operacion.md) | Panel de operación: aprobación de acciones y chat de solo lectura |
 
 ## Licencia
 

@@ -5,6 +5,7 @@ Todo lo que lee del clúster se trata como dato no fiable (docs/arquitectura.md)
 El modelo se elige en la configuración: API de Anthropic o cualquier API compatible con
 OpenAI, como el proxy de LiteLLM u Ollama (docs/adr/0007-interfaz-con-el-modelo.md).
 """
+import copy
 import json
 import os
 import re
@@ -267,6 +268,13 @@ class AnthropicBackend:
     def __init__(self, name=DEFAULT_MODEL["name"], effort=DEFAULT_MODEL["effort"], client=None):
         self.name, self.effort = name, effort
         self.client = client or anthropic.Anthropic()
+        self.system, self.tool_specs = SYSTEM_PROMPT, TOOLS
+
+    def variant(self, system, tools):
+        """Misma conexión con otro papel: el chat usa otro prompt y solo herramientas de lectura."""
+        other = copy.copy(self)
+        other.system, other.tool_specs = system, tools
+        return other
 
     def first(self, prompt):
         return [{"role": "user", "content": prompt}]
@@ -279,8 +287,8 @@ class AnthropicBackend:
             fallbacks="default",
             thinking={"type": "adaptive", "display": "summarized"},
             output_config={"effort": self.effort},
-            system=SYSTEM_PROMPT,
-            tools=TOOLS,
+            system=self.system,
+            tools=self.tool_specs,
             messages=messages,
         )
         texts = []
@@ -316,7 +324,12 @@ class OpenAICompatibleBackend:
         self.url = base_url.rstrip("/") + "/chat/completions"
         self.api_key = api_key
         self.post = post or self._post
-        self.tools = [
+        self.system = SYSTEM_PROMPT
+        self.tools = self.convert(TOOLS)
+
+    @staticmethod
+    def convert(tools):
+        return [
             {
                 "type": "function",
                 "function": {
@@ -326,8 +339,14 @@ class OpenAICompatibleBackend:
                     "strict": True,
                 },
             }
-            for tool in TOOLS
+            for tool in tools
         ]
+
+    def variant(self, system, tools):
+        """Misma conexión con otro papel: el chat usa otro prompt y solo herramientas de lectura."""
+        other = copy.copy(self)
+        other.system, other.tools = system, self.convert(tools)
+        return other
 
     def _post(self, body):
         headers = {"Content-Type": "application/json"}
@@ -343,7 +362,7 @@ class OpenAICompatibleBackend:
             raise ModelError(type(error).__name__) from error
 
     def first(self, prompt):
-        return [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
+        return [{"role": "system", "content": self.system}, {"role": "user", "content": prompt}]
 
     def call(self, messages):
         data = self.post({"model": self.name, "messages": messages, "tools": self.tools, "tool_choice": "auto"})

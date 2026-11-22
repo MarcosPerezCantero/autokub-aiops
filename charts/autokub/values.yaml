@@ -1,8 +1,24 @@
 # Configuración de autokub. Ver docs/despliegue.md.
 
 # propose (por defecto): detecta, propone y consulta a OPA, pero no modifica el clúster ni tiene
-# permisos para hacerlo. execute: aplica las acciones que OPA autoriza.
+# permisos para hacerlo. approve: lo que OPA autoriza espera a que una persona lo apruebe en el panel.
+# execute: aplica las acciones que OPA autoriza.
 mode: propose
+
+# Modo approve: tiempo para decidir antes de que la acción caduque y se avise a una persona
+approval:
+  timeoutSeconds: 900
+
+# Panel de operación (docs/adr/0009-panel-de-operacion.md). Se abre con:
+#   kubectl -n autokub-system port-forward deploy/autokub-panel 8091
+panel:
+  enabled: true
+  # Chat de solo lectura con el agente (solo con proposer: llm)
+  chat: true
+  # 127.0.0.1: solo se llega con kubectl port-forward, y el RBAC de Kubernetes decide quién opera.
+  # 0.0.0.0 solo detrás de un proxy que autentique; añade su nombre en allowedHosts.
+  host: 127.0.0.1
+  allowedHosts: []
 
 # Quién propone: llm (agente) o rules (reglas fijas, sin modelo; útil para probar sin clave)
 proposer: llm
@@ -41,7 +57,7 @@ image:
 opa:
   image: openpolicyagent/opa:1.22.0-static
 
-# El ejecutor solo acepta tráfico del pod del agente
+# El ejecutor solo acepta tráfico del agente y del panel; el chat del agente, solo del panel
 networkPolicy:
   enabled: true
 
@@ -54,4 +70,7 @@ resources:
     limits: {memory: 128Mi}
   opa:
     requests: {cpu: 20m, memory: 32Mi}
+    limits: {memory: 128Mi}
+  panel:
+    requests: {cpu: 10m, memory: 32Mi}
     limits: {memory: 128Mi}

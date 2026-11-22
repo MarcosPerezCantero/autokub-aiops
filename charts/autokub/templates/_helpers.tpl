@@ -11,7 +11,9 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "autokub.validate" -}}
 {{- if not .Values.namespaces }}{{ fail "namespaces es obligatorio: indica al menos un namespace con sus targets" }}{{ end }}
-{{- if not (has .Values.mode (list "propose" "execute")) }}{{ fail "mode debe ser propose o execute" }}{{ end }}
+{{- if not (has .Values.mode (list "propose" "approve" "execute")) }}{{ fail "mode debe ser propose, approve o execute" }}{{ end }}
+{{- if not (and (has (kindOf .Values.approval.timeoutSeconds) (list "float64" "int64" "int")) (gt (int .Values.approval.timeoutSeconds) 0)) }}{{ fail "approval.timeoutSeconds debe ser un entero positivo" }}{{ end }}
+{{- if and (eq .Values.mode "approve") (not .Values.panel.enabled) }}{{ fail "mode: approve necesita el panel (panel.enabled: true) para aprobar" }}{{ end }}
 {{- if not (has .Values.proposer (list "llm" "rules")) }}{{ fail "proposer debe ser llm o rules" }}{{ end }}
 {{- if and (eq .Values.model.provider "openai") (not .Values.model.base_url) }}{{ fail "model.base_url es obligatorio con provider: openai" }}{{ end }}
 {{- $dns := "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" }}
@@ -25,11 +27,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 {{- end }}
 
+{{- define "autokub.chatEnabled" -}}
+{{- if and .Values.panel.enabled .Values.panel.chat (eq .Values.proposer "llm") }}true{{ end }}
+{{- end }}
+
 {{- define "autokub.podSecurity" -}}
 securityContext:
   runAsNonRoot: true
   runAsUser: 65532
   runAsGroup: 65532
+  # Los Secrets montados (token de aprobación) quedan legibles para el proceso y no para otros
+  fsGroup: 65532
   seccompProfile:
     type: RuntimeDefault
 {{- end }}

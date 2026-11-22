@@ -1,5 +1,5 @@
 {{- if .Values.networkPolicy.enabled }}
-# Solo el pod del agente puede enviar propuestas al ejecutor
+# El agente envía propuestas y consulta su estado; el panel envía aprobaciones
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -18,6 +18,55 @@ spec:
             matchLabels:
               app.kubernetes.io/instance: {{ .Release.Name }}
               app.kubernetes.io/component: agent
+        {{- if .Values.panel.enabled }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: panel
+        {{- end }}
       ports:
         - port: 8090
+---
+# El agente no recibe tráfico, salvo las preguntas del panel al chat
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: autokub-agent
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: agent
+  policyTypes: [Ingress]
+  {{- if include "autokub.chatEnabled" . }}
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: panel
+      ports:
+        - port: 8092
+  {{- else }}
+  ingress: []
+  {{- end }}
+{{- if .Values.panel.enabled }}
+---
+# Nadie llega al panel por la red: kubectl port-forward no pasa por las NetworkPolicies
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: autokub-panel
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: panel
+  policyTypes: [Ingress]
+  ingress: []
+{{- end }}
 {{- end }}

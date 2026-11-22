@@ -4,11 +4,23 @@ autokub {{ .Chart.AppVersion }} instalado en modo {{ .Values.mode }}.
 AVISO: networkPolicy.enabled=false. Cualquier pod del clúster puede enviar propuestas al ejecutor.
 OPA sigue autorizando cada acción, pero se pierde una barrera.
 {{- end }}
+{{- if .Values.panel.enabled }}
+
+Panel de operación (incidentes, decisiones de OPA, aprobaciones y chat):
+  kubectl -n {{ .Release.Namespace }} port-forward deploy/autokub-panel 8091
+  y abre http://localhost:8091
+{{- end }}
 {{- if eq .Values.mode "propose" }}
 
 Modo propuesta: detecta y propone, pero no modifica el clúster (no tiene permisos para hacerlo).
 Para ver qué haría:
   kubectl -n {{ .Release.Namespace }} logs deploy/autokub-executor -c executor -f | grep action_would_execute
+{{- else if eq .Values.mode "approve" }}
+
+Modo aprobación: lo que OPA autoriza espera a que una persona lo apruebe en el panel. Actúa sobre:
+{{- range $namespace, $settings := .Values.namespaces }}
+  {{ $namespace }}: {{ join ", " $settings.targets }}
+{{- end }}
 {{- else }}
 
 Modo ejecución: aplica las acciones que OPA autoriza sobre:

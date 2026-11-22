@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>autokub · operación</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #171e26; --raised: #1d2630; --line: #2a3441; --text: #e6edf3; --muted: #8b98a8;
+    --active: #58a6ff; --ok: #3fb950; --bad: #f85149; --warn: #d29922; --idle: #a371f7;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, "Segoe UI", sans-serif; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 17px; }
+  h1 span { color: var(--muted); font-weight: 400; }
+  h2 { margin: 0 0 10px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .meta { display: flex; gap: 14px; align-items: center; color: var(--muted); font-size: 13px; }
+  .mode { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; color: var(--text); }
+  .mode.approve { border-color: var(--warn); } .mode.execute { border-color: var(--bad); } .mode.propose { border-color: var(--idle); }
+  .live b { color: var(--ok); } .live.off b { color: var(--bad); }
+  .layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); min-height: calc(100vh - 53px); }
+  aside { border-right: 1px solid var(--line); padding: 14px; }
+  .filters { display: flex; gap: 6px; margin-bottom: 12px; }
+  .filters button { flex: 1; background: none; border: 1px solid var(--line); border-radius: 6px; padding: 4px; cursor: pointer; font-size: 13px; }
+  .filters button.on { border-color: var(--active); }
+  .incident { display: block; width: 100%; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; margin-bottom: 8px; cursor: pointer; }
+  .incident.selected { border-color: var(--active); }
+  .incident strong { display: block; overflow-wrap: anywhere; }
+  .incident small { color: var(--muted); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+  .chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .chip.running::before { background: var(--active); } .chip.pending::before { background: var(--warn); }
+  .chip.escalated::before { background: var(--bad); } .chip.closed::before { background: var(--ok); }
+  .chip.proposed::before { background: var(--idle); }
+  main { padding: 18px 22px; min-width: 0; }
+  .title { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .title h2 { font-size: 20px; color: var(--text); text-transform: none; letter-spacing: 0; margin: 0; }
+  .title small { color: var(--muted); }
+  .banner { padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; background: var(--panel); border-left: 4px solid var(--line); }
+  .banner.closed { border-left-color: var(--ok); } .banner.escalated { border-left-color: var(--bad); }
+  .banner.running { border-left-color: var(--active); } .banner.pending { border-left-color: var(--warn); }
+  .banner.proposed { border-left-color: var(--idle); }
+  .approval { background: var(--raised); border: 2px solid var(--warn); border-radius: 10px; padding: 16px; margin-bottom: 18px; }
+  .approval h3 { margin: 0 0 6px; font-size: 16px; }
+  .approval p { margin: 6px 0; }
+  .approval .why { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .approval .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .approval input { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; width: 200px; }
+  .btn { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 6px 16px; cursor: pointer; }
+  .btn.go { background: #1f6f3a; border-color: var(--ok); } .btn.stop { border-color: var(--bad); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .note { color: var(--muted); font-size: 13px; }
+  .flow { display: grid; grid-template-columns: repeat(var(--stages), 1fr); gap: 22px; margin-bottom: 20px; }
+  .stage { position: relative; background: var(--panel); border: 2px solid var(--line); border-radius: 8px; padding: 10px 12px; min-height: 88px; }
+  .stage:not(:last-child)::after { content: "→"; position: absolute; right: -19px; top: 28px; color: var(--muted); }
+  .stage strong { display: block; font-size: 14px; }
+  .stage small { display: block; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
+  .stage.active { border-color: var(--active); } .stage.ok { border-color: var(--ok); }
+  .stage.bad { border-color: var(--bad); } .stage.warn { border-color: var(--warn); }
+  .columns { display: grid; grid-template-columns: 3fr 2fr; gap: 18px; margin-bottom: 18px; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; min-width: 0; margin-bottom: 18px; }
+  .columns .box { margin-bottom: 0; }
+  .stack { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+  .entry { padding: 9px 0; border-top: 1px solid var(--line); }
+  .entry:first-of-type { border-top: 0; }
+  .entry .kind { font-size: 12px; color: var(--muted); }
+  .entry p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .entry pre, .facts { margin: 6px 0 0; padding: 8px; max-height: 220px; overflow: auto; background: var(--bg); border-radius: 4px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .decision { padding: 8px 0; border-top: 1px solid var(--line); }
+  .decision:first-of-type { border-top: 0; }
+  .decision b.allow { color: var(--ok); } .decision b.deny { color: var(--bad); }
+  .usage { margin-top: 10px; color: var(--muted); font-size: 13px; }
+  .row { display: grid; grid-template-columns: 64px 70px 1fr; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .row:first-of-type { border-top: 0; }
+  .row time, .row span { color: var(--muted); }
+  .row div { overflow-wrap: anywhere; min-width: 0; }
+  .empty { color: var(--muted); }
+  .chat .msg { margin: 8px 0; padding: 8px 12px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .chat .q { background: var(--raised); margin-left: 15%; }
+  .chat .a { background: var(--bg); margin-right: 15%; }
+  .chat .a.error { color: var(--bad); }
+  .chat form { display: flex; gap: 8px; margin-top: 10px; }
+  .chat textarea { flex: 1; resize: vertical; min-height: 42px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  .chat select { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    aside { border-right: 0; border-bottom: 1px solid var(--line); }
+    .flow { grid-template-columns: 1fr; gap: 10px; }
+    .stage:not(:last-child)::after { display: none; }
+    .columns { grid-template-columns: 1fr; }
+    main { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>autokub <span>· panel de operación</span></h1>
+  <div class="meta">
+    <span class="mode" id="mode">modo …</span>
+    <span class="live" id="live"><b>●</b> <span id="live-text">conectando</span></span>
+  </div>
+</header>
+<div class="layout">
+  <aside>
+    <div class="filters">
+      <button id="filter-open" class="on">Abiertos</button>
+      <button id="filter-all">Todos</button>
+    </div>
+    <div id="incidents"></div>
+  </aside>
+  <main id="main"></main>
+</div>
+<script>
+"use strict";
+// Todo el texto de los eventos se inserta con textContent: puede venir de logs y nunca se interpreta como HTML.
+
+const MODES = {
+  propose: "modo propuesta: no aplica nada",
+  approve: "modo aprobación: aplica lo que apruebes",
+  execute: "modo ejecución: aplica lo que OPA permite",
+};
+const STATUS = {
+  running: "En curso", pending: "Esperando tu aprobación", escalated: "Necesita a una persona",
+  rejected: "Rechazada", proposed: "Propuesta sin aplicar", closed: "Cerrado", partial: "Historial incompleto",
+};
+const LABELS = {
+  incident_detected: "Incidente detectado", agent_thinking: "Razonamiento", agent_text: "Comentario del agente",
+  agent_tool_call: "Lee", agent_tool_result: "Resultado", agent_diagnosis: "Diagnóstico",
+  agent_failed: "El agente no pudo proponer", action_proposed: "Acción propuesta", action_rejected: "Propuesta rechazada por formato",
+  action_allowed: "OPA permite", action_denied: "OPA bloquea", action_pending_approval: "Pendiente de aprobación",
+  action_approved: "Aprobada", action_rejected_by_human: "Rechazada por una persona", approval_expired: "Aprobación caducada",
+  action_executed: "Acción aplicada", action_would_execute: "Se aplicaría (modo propuesta)", action_failed: "Fallo al aplicar",
+  history_rewrite_failed: "No se pudo reescribir el historial",
+  verification_passed: "Verificación superada", verification_failed: "Verificación fallida",
+  incident_escalated: "Aviso a una persona", incident_closed: "Incidente cerrado",
+  chat_question: "Pregunta", chat_answer: "Respuesta", chat_tool_call: "Chat lee", chat_failed: "Chat sin respuesta",
+};
+const ACTIONS = {
+  rollout_undo: "volver a la revisión anterior", rollout_restart: "reiniciar los pods",
+  set_memory_limit: "subir el límite de memoria", escalate: "avisar a una persona",
+};
+const HIDDEN_IN_LOG = new Set(["agent_thinking", "agent_text", "agent_tool_result", "chat_answer", "chat_tool_call"]);
+
+let info = { mode: "propose", namespaces: [], approvals: false, chat: false };
+let armedApproval = null;  // { id, at, until }: aprobación pendiente de confirmar
+let events = [];
+let version = "";
+let selected = null;
+let showAll = false;
+let userPicked = false;
+const chatState = {};  // por incidente: { busy, local: [{question, answer, error, baseline}] }
+
+const $ = (id) => document.getElementById(id);
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+function localTime(timestamp) {
+  const date = new Date(timestamp);
+  return isNaN(date) ? "" : date.toLocaleTimeString("es-ES");
+}
+function storage(key, value) {
+  try {
+    if (value === undefined) return localStorage.getItem(key) || "";
+    localStorage.setItem(key, value);
+  } catch { return ""; }
+}
+
+// --- De eventos a incidentes ---
+
+function buildIncidents() {
+  const byId = new Map();
+  for (const event of events) {
+    const id = event.incident_id || "general";
+    if (!byId.has(id)) byId.set(id, { id, events: [] });
+    byId.get(id).events.push(event);
+  }
+  const incidents = [...byId.values()].map(describe);
+  incidents.sort((a, b) => String(b.start).localeCompare(String(a.start)));
+  return incidents;
+}
+
+function describe(incident) {
+  const items = incident.events;
+  const detected = items.find((e) => e.event === "incident_detected");
+  const proposed = items.find((e) => e.event === "action_proposed" && e.data && e.data.target);
+  incident.start = items[0].timestamp;
+  incident.deployment = detected ? detected.data.deployment : proposed ? proposed.data.target : null;
+  incident.namespace = detected ? detected.data.namespace : proposed ? proposed.data.namespace : null;
+  incident.general = incident.id === "general";
+  incident.pending = pendingApproval(items);
+  const has = (name) => items.some((e) => e.event === name);
+  const last = (names) => [...items].reverse().find((e) => names.includes(e.event));
+  const latest = last(["incident_closed", "incident_escalated", "action_rejected_by_human", "action_would_execute", "action_pending_approval"]);
+  if (incident.general) incident.status = "closed";
+  else if (has("incident_closed")) incident.status = "closed";
+  // Sin la detección, faltan los eventos del pod del agente (se reinició): no se sabe cómo acabó
+  else if (!detected && !incident.pending) incident.status = "partial";
+  else if (incident.pending) incident.status = "pending";
+  else if (!latest) incident.status = "running";
+  else incident.status = {
+    incident_escalated: "escalated", action_rejected_by_human: "rejected",
+    action_would_execute: "proposed", action_pending_approval: "running",
+  }[latest.event] || "running";
+  incident.title = incident.general ? "Preguntas generales" : incident.deployment || incident.id;
+  return incident;
+}
+
+// Solo cuentan los eventos que el panel leyó del pod del ejecutor (o del fichero del laboratorio):
+// un agente manipulado podría imprimir una pendiente falsa para que se apruebe otra sin verla.
+const TRUSTED_SOURCES = ["executor", "file"];
+
+function pendingApproval(items) {
+  const open = new Map();
+  for (const e of items) {
+    if (!TRUSTED_SOURCES.includes(e._source)) continue;
+    if (e.event === "action_pending_approval") open.set(e.data.approval_id, e);
+    if (["action_approved", "action_rejected_by_human", "approval_expired", "approval_superseded"].includes(e.event)) open.delete(e.data.approval_id);
+  }
+  const pending = [...open.values()].at(-1);
+  if (!pending) return null;
+  const expires = new Date(pending.timestamp).getTime() + 1000 * (pending.data.expires_in_seconds || 0);
+  return Date.now() < expires ? { event: pending, expires } : null;
+}
+
+// --- Lista de incidentes ---
+
+function renderList(incidents) {
+  const box = $("incidents");
+  box.replaceChildren();
+  const visible = incidents.filter((i) => showAll || !["closed", "partial"].includes(i.status) || i.id === selected);
+  if (!visible.length) box.append(el("div", "empty", showAll ? "Sin incidentes todavía." : "Ningún incidente abierto."));
+  for (const incident of visible) {
+    const button = el("button", `incident${incident.id === selected ? " selected" : ""}`);
+    button.append(el("span", `chip ${incident.status}`, STATUS[incident.status]), el("strong", "", incident.title));
+    button.append(el("small", "", incident.general ? "chat sin incidente" : `${incident.namespace || ""} · ${localTime(incident.start)}`));
+    button.onclick = () => { selected = incident.id; userPicked = true; render(); };
+    box.append(button);
+  }
+}
+
+// --- Detalle ---
+
+function renderDetail(incident) {
+  const main = $("main");
+  main.replaceChildren();
+  if (!incident) {
+    main.append(el("div", "banner", "Sin incidentes. Cuando autokub detecte uno, aparecerá a la izquierda con su diagnóstico, la decisión de OPA y, en modo aprobación, los botones para aprobarlo o rechazarlo."));
+    main.append(renderChat({ id: null, general: true, events: [] }));
+    return;
+  }
+  const title = el("div", "title");
+  const heading = el("div");
+  heading.append(el("h2", "", incident.title));
+  heading.append(el("small", "", incident.general ? "Preguntas al agente sin incidente" : `${incident.namespace || ""} · ${incident.id} · desde ${localTime(incident.start)}`));
+  title.append(heading, el("span", `chip ${incident.status}`, STATUS[incident.status]));
+  main.append(title);
+  if (incident.general) {
+    main.append(renderChat(incident));
+    return;
+  }
+  main.append(renderBanner(incident));
+  if (incident.pending) main.append(renderApproval(incident));
+  main.append(renderFlow(incident));
+  const columns = el("div", "columns");
+  const side = el("div", "stack");
+  side.append(renderDecisions(incident.events), renderTimeline(incident.events));
+  columns.append(renderAgent(incident.events), side);
+  main.append(columns, renderChat(incident));
+}
+
+function renderBanner(incident) {
+  const items = incident.events;
+  const find = (name) => [...items].reverse().find((e) => e.event === name);
+  const banner = el("div", `banner ${incident.status === "rejected" ? "proposed" : incident.status}`);
+  const diagnosis = find("agent_diagnosis");
+  if (incident.status === "partial") {
+    banner.textContent = "Faltan los eventos del detector y del agente: su pod se reinició y sus logs anteriores ya no están. Solo se ve lo que registró el ejecutor.";
+  } else if (incident.status === "pending") {
+    banner.textContent = "OPA permite la acción propuesta y espera tu decisión. Al aprobarla, el ejecutor vuelve a consultar a OPA con el estado de ese momento.";
+  } else if (incident.status === "proposed") {
+    const p = find("action_would_execute");
+    banner.textContent = `Modo propuesta: OPA permitiría ${ACTIONS[p.summary] || p.summary} sobre ${p.data.target}. No se ha aplicado.`;
+  } else if (incident.status === "escalated") {
+    banner.textContent = `Necesita a una persona: ${find("incident_escalated").summary}`;
+  } else if (incident.status === "rejected") {
+    banner.textContent = `${find("action_rejected_by_human").summary}. El incidente sigue abierto hasta que el fallo desaparezca.`;
+  } else if (incident.status === "closed") {
+    const closed = find("incident_closed");
+    banner.textContent = `Cerrado: ${closed.summary}`;
+  } else {
+    banner.textContent = diagnosis ? `En curso. Diagnóstico: ${diagnosis.summary}` : "En curso: el agente está diagnosticando.";
+  }
+  return banner;
+}
+
+function renderApproval(incident) {
+  const pending = incident.pending.event;
+  const action = pending.data;
+  const card = el("section", "approval");
+  card.append(el("h3", "", `¿Aplicar «${ACTIONS[action.type] || action.type}» sobre ${action.target}?`));
+  card.append(el("p", "", `Namespace ${action.namespace} · acción ${action.type}${action.params && action.params.memory_bytes ? ` · ${Math.round(action.params.memory_bytes / 1048576)} Mi` : ""}`));
+  const diagnosis = [...incident.events].reverse().find((e) => e.event === "agent_diagnosis");
+  if (diagnosis) card.append(el("p", "why", `Diagnóstico del agente: ${diagnosis.summary}`));
+  const allowed = [...incident.events].reverse().find((e) => e.event === "action_allowed");
+  if (allowed && allowed.data.facts) {
+    card.append(el("p", "note", "Hechos que OPA evaluó, leídos del clúster por el ejecutor:"));
+    card.append(el("pre", "facts", JSON.stringify(allowed.data.facts, null, 2)));
+  }
+  const minutes = Math.max(0, Math.round((incident.pending.expires - Date.now()) / 60000));
+  const row = el("div", "actions");
+  const name = el("input");
+  name.dataset.keep = "approver";
+  name.placeholder = "Tu nombre (queda registrado)";
+  name.maxLength = 64;
+  name.value = storage("autokub-approver");
+  name.oninput = () => storage("autokub-approver", name.value);
+  const approve = el("button", "btn go", "Aprobar");
+  const reject = el("button", "btn stop", "Rechazar");
+  const status = el("span", "note", info.approvals ? `Caduca en ${minutes} min si nadie decide.` : "Las aprobaciones no están activadas en este panel.");
+  approve.disabled = reject.disabled = !info.approvals;
+  const decide = async (decision) => {
+    approve.disabled = reject.disabled = true;
+    status.textContent = decision === "approve" ? "Aprobando: el ejecutor vuelve a consultar a OPA…" : "Rechazando…";
+    const { ok, body } = await post(`/api/approvals/${encodeURIComponent(action.approval_id)}`, { decision, by: name.value });
+    status.textContent = ok ? resultText(body.status) : `No se pudo: ${(body.reasons || [body.error || "error"]).join(", ")}`;
+    if (!ok) approve.disabled = reject.disabled = false;
+  };
+  // Aprobar exige dos clics separados: la página se redibuja con cada evento y un clic dirigido
+  // a otro sitio no debe poder aplicar una acción. Rechazar no cambia el clúster: basta uno.
+  const armed = armedApproval && armedApproval.id === action.approval_id && Date.now() < armedApproval.until;
+  if (armed) {
+    approve.textContent = `Confirmar: ${ACTIONS[action.type] || action.type}`;
+    status.textContent = "Pulsa de nuevo para aplicarla. Se cancela sola en unos segundos.";
+  }
+  approve.onclick = () => {
+    const now = Date.now();
+    if (armedApproval && armedApproval.id === action.approval_id && now < armedApproval.until && now - armedApproval.at > 600) {
+      armedApproval = null;
+      decide("approve");
+      return;
+    }
+    if (!armedApproval || armedApproval.id !== action.approval_id || now >= armedApproval.until) {
+      armedApproval = { id: action.approval_id, at: now, until: now + 8000 };
+      setTimeout(render, 8100);
+      render();
+    }
+  };
+  reject.onclick = () => { armedApproval = null; decide("reject"); };
+  row.append(name, approve, reject, status);
+  card.append(row);
+  return card;
+}
+
+function resultText(status) {
+  return { executed: "Aplicada. Ahora se verifica la recuperación.", rejected: "Rechazada.", denied: "OPA la ha bloqueado al volver a evaluarla.", failed: "Falló al aplicarla." }[status] || status;
+}
+
+function renderFlow(incident) {
+  const items = incident.events;
+  const approval = info.mode === "approve" || items.some((e) => e.event === "action_pending_approval");
+  const stages = [
+    ["detector", "Detector", "Vigila los pods"],
+    ["agent", "Agente", "Diagnostica y propone"],
+    ["opa", "OPA", "Autoriza o bloquea"],
+    ...(approval ? [["human", "Persona", "Aprueba o rechaza"]] : []),
+    ["executor", "Ejecutor", "Aplica la acción"],
+    ["verify", "Verificación", "Comprueba la recuperación"],
+  ];
+  const state = Object.fromEntries(stages.map(([key, , hint]) => [key, { status: "", note: hint }]));
+  const set = (key, status, note) => { if (state[key]) state[key] = { status, note }; };
+  for (const e of items) {
+    switch (e.event) {
+      case "incident_detected": set("detector", "ok", "Fallo detectado"); set("agent", "active", "Diagnosticando"); break;
+      case "agent_tool_call": set("agent", "active", "Leyendo el clúster"); break;
+      case "agent_diagnosis": set("agent", "ok", "Propuesta lista"); break;
+      case "agent_failed": set("agent", "bad", "Sin propuesta"); break;
+      case "action_proposed":
+        if (e.summary !== "escalate") { set("agent", "ok", `Propone ${e.summary}`); set("opa", "active", "Evaluando"); }
+        break;
+      case "action_rejected": set("opa", "bad", "Rechazada por formato"); break;
+      case "action_denied": set("opa", "bad", `Bloqueada: ${e.summary}`); break;
+      case "action_allowed": set("opa", "ok", "Permitida"); set("executor", "active", "Aplicando"); break;
+      case "action_pending_approval": set("human", "warn", "Esperando decisión"); set("executor", "", "Esperando aprobación"); break;
+      case "action_approved": set("human", "ok", e.summary); break;
+      case "action_rejected_by_human": set("human", "bad", e.summary); set("executor", "", "No se aplica"); break;
+      case "approval_expired": set("human", "bad", "Caducada"); set("executor", "", "No se aplica"); break;
+      case "action_would_execute": set("executor", "ok", "Modo propuesta: no se aplica"); break;
+      case "action_executed": set("executor", "ok", "Aplicada"); set("verify", "active", "Esperando estabilidad"); break;
+      case "action_failed": set("executor", "bad", "Falló al aplicarla"); break;
+      case "verification_passed": set("verify", "ok", "Recuperación verificada"); break;
+      case "verification_failed": set("verify", "bad", "Sin recuperar"); break;
+    }
+  }
+  const flow = el("section", "flow");
+  flow.style.setProperty("--stages", stages.length);
+  for (const [key, title] of stages) {
+    const stage = el("div", `stage ${state[key].status}`);
+    stage.append(el("strong", "", title), el("small", "", state[key].note));
+    flow.append(stage);
+  }
+  return flow;
+}
+
+function renderAgent(items) {
+  const box = el("section", "box");
+  box.append(el("h2", "", "Razonamiento del agente"));
+  const entries = items.filter((e) => e.event.startsWith("agent_"));
+  if (!entries.length) box.append(el("div", "empty", "Este incidente no ha pasado por el agente LLM."));
+  for (const e of entries) {
+    const entry = el("div", "entry");
+    entry.append(el("div", "kind", `${localTime(e.timestamp)} · ${LABELS[e.event] || e.event}`));
+    if (e.event === "agent_tool_call") entry.append(el("p", "", `${e.summary} ${JSON.stringify(e.data.args || {})}`));
+    else if (e.event === "agent_tool_result") entry.append(el("pre", "", e.summary));
+    else entry.append(el("p", "", e.summary));
+    box.append(entry);
+  }
+  const usage = [...items].reverse().find((e) => e.event.startsWith("agent_") && e.data && e.data.input_tokens !== undefined);
+  if (usage) box.append(el("div", "usage", `Modelo ${usage.data.model} · ${usage.data.steps} pasos · ${usage.data.input_tokens} tokens de entrada, ${usage.data.output_tokens} de salida`));
+  return box;
+}
+
+function renderDecisions(items) {
+  const box = el("section", "box");
+  box.append(el("h2", "", "Decisiones de OPA"));
+  const decisions = items.filter((e) => ["action_allowed", "action_denied", "action_rejected"].includes(e.event));
+  if (!decisions.length) box.append(el("div", "empty", "Todavía no ha evaluado ninguna acción."));
+  for (const e of decisions) {
+    const row = el("div", "decision");
+    const allow = e.event === "action_allowed";
+    row.append(el("b", allow ? "allow" : "deny", allow ? "Permite" : e.event === "action_denied" ? "Bloquea" : "Formato no válido"));
+    row.append(` ${localTime(e.timestamp)} · ${allow ? `${e.summary} sobre ${e.data.target}` : e.summary}`);
+    if (allow && e.data.facts) row.append(el("pre", "facts", JSON.stringify(e.data.facts, null, 2)));
+    box.append(row);
+  }
+  return box;
+}
+
+function renderTimeline(items) {
+  const box = el("section", "box");
+  box.append(el("h2", "", "Registro"));
+  for (const e of items.filter((e) => !HIDDEN_IN_LOG.has(e.event))) {
+    const row = el("div", "row");
+    const detail = el("div");
+    detail.append(el("b", "", LABELS[e.event] || e.event));
+    if (!["agent_diagnosis", "chat_question"].includes(e.event)) detail.append(` ${String(e.summary).slice(0, 140)}`);
+    row.append(el("time", "", localTime(e.timestamp)), el("span", "", e.component), detail);
+    box.append(row);
+  }
+  return box;
+}
+
+// --- Chat ---
+
+function chatTurns(items) {
+  const turns = [];
+  for (const e of items) {
+    if (e.event === "chat_question") turns.push({ question: e.summary, answer: null });
+    if ((e.event === "chat_answer" || e.event === "chat_failed") && turns.length && turns.at(-1).answer === null) {
+      turns.at(-1).answer = e.summary;
+      turns.at(-1).error = e.event === "chat_failed";
+    }
+  }
+  return turns;
+}
+
+function incidentContext(incident) {
+  if (!incident.id) return "";
+  const pick = (names) => incident.events.filter((e) => names.includes(e.event)).map((e) => ({ event: e.event, summary: String(e.summary).slice(0, 600), data: e.data && e.data.facts ? { facts: e.data.facts } : undefined }));
+  return JSON.stringify({
+    incident_id: incident.id, deployment: incident.deployment, namespace: incident.namespace, status: incident.status,
+    detected: (incident.events.find((e) => e.event === "incident_detected") || {}).data,
+    steps: pick(["agent_diagnosis", "agent_failed", "action_allowed", "action_denied", "action_pending_approval", "action_approved", "action_rejected_by_human", "action_executed", "action_would_execute", "verification_passed", "verification_failed", "incident_escalated", "incident_closed"]),
+  }).slice(0, 6000);
+}
+
+function renderChat(incident) {
+  const key = incident.id || "general";
+  const local = chatState[key] || (chatState[key] = { busy: false, local: [] });
+  const box = el("section", "box chat");
+  box.append(el("h2", "", "Preguntar al agente (solo lectura)"));
+  if (!info.chat) {
+    box.append(el("div", "empty", "El chat no está activado."));
+    return box;
+  }
+  const turns = chatTurns(incident.events);
+  // Lo local se muestra hasta que su respuesta llega por los eventos
+  local.local = local.local.filter((turn) => !(turns[turn.baseline] && turns[turn.baseline].answer !== null));
+  const shown = turns.filter((_, index) => !local.local.some((turn) => turn.baseline === index));
+  const all = [...shown, ...local.local];
+  if (!all.length) box.append(el("p", "note", incident.general ? "Pregunta sobre el estado del clúster en los namespaces vigilados." : "Pregunta por este incidente: por qué propone esa acción, qué ha visto en los logs, qué riesgo tiene… El agente solo puede leer."));
+  for (const turn of all) {
+    box.append(el("div", "msg q", turn.question));
+    if (turn.answer !== null && turn.answer !== undefined) box.append(el("div", `msg a${turn.error ? " error" : ""}`, turn.answer));
+  }
+  if (local.busy) box.append(el("div", "msg a note", "Pensando… (puede tardar hasta un minuto)"));
+  const form = el("form");
+  let namespace = incident.namespace;
+  if (!namespace) {
+    const select = el("select");
+    for (const ns of info.namespaces) select.append(new Option(ns, ns));
+    select.value = storage("autokub-chat-ns") || info.namespaces[0] || "";
+    select.onchange = () => storage("autokub-chat-ns", select.value);
+    form.append(select);
+    namespace = () => select.value;
+  }
+  const input = el("textarea");
+  input.dataset.keep = `chat-${key}`;
+  input.maxLength = 1000;
+  input.placeholder = "¿Por qué crees que falla? ¿Qué cambió en la última revisión?";
+  input.value = local.draft || "";
+  input.oninput = () => { local.draft = input.value; };
+  input.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } };
+  const send = el("button", "btn", "Enviar");
+  send.disabled = local.busy;
+  form.append(input, send);
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const question = input.value.trim();
+    if (!question || local.busy) return;
+    local.busy = true;
+    local.draft = "";
+    const baseline = turns.length;
+    const history = all.filter((t) => t.answer && !t.error).slice(-6).map((t) => ({ question: t.question, answer: t.answer }));
+    local.local.push({ question, answer: null, baseline });
+    render();
+    const { ok, body } = await post("/api/chat", {
+      namespace: typeof namespace === "function" ? namespace() : namespace,
+      incident_id: incident.id, question, context: incidentContext(incident), history,
+    });
+    const turn = local.local.find((t) => t.question === question && t.answer === null);
+    if (turn) { turn.answer = ok ? body.answer : `No se pudo responder: ${body.error || "error"}`; turn.error = !ok; }
+    local.busy = false;
+    render();
+  };
+  box.append(form);
+  return box;
+}
+
+// --- Red ---
+
+async function post(path, body) {
+  try {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Autokub-Panel": "1" },
+      body: JSON.stringify(body),
+    });
+    let data = {};
+    try { data = await response.json(); } catch { /* respuesta vacía */ }
+    return { ok: response.ok, body: data };
+  } catch {
+    return { ok: false, body: { error: "sin conexión con el panel" } };
+  }
+}
+
+function render() {
+  const incidents = buildIncidents();
+  const ids = incidents.map((i) => i.id);
+  if (!userPicked || !ids.includes(selected)) {
+    // Sin elección del usuario, se muestra lo más urgente: una aprobación pendiente o el último incidente
+    const urgent = incidents.find((i) => i.status === "pending") || incidents.find((i) => !i.general);
+    selected = urgent ? urgent.id : ids[0] || null;
+  }
+  // Redibujar sustituye los elementos: se devuelve el foco y el cursor al campo que se estaba usando
+  const active = document.activeElement;
+  const keep = active && active.dataset ? active.dataset.keep : null;
+  const caret = keep ? [active.selectionStart, active.selectionEnd] : null;
+  const scroll = window.scrollY;
+  renderList(incidents);
+  renderDetail(incidents.find((i) => i.id === selected));
+  window.scrollTo(0, scroll);
+  const field = keep && document.querySelector(`[data-keep="${CSS.escape(keep)}"]`);
+  if (field) {
+    field.focus({ preventScroll: true });
+    try { field.setSelectionRange(...caret); } catch { /* sin cursor */ }
+  }
+}
+
+async function poll() {
+  try {
+    const response = await fetch(`/api/events?version=${encodeURIComponent(version)}`);
+    const data = await response.json();
+    if (data.events) { events = data.events; version = data.version; render(); }
+    $("live").className = data.error ? "live off" : "live";
+    $("live-text").textContent = data.error ? "sin acceso a los eventos" : "en directo";
+  } catch {
+    $("live").className = "live off";
+    $("live-text").textContent = "sin conexión";
+  }
+}
+
+async function start() {
+  try {
+    info = await (await fetch("/api/info")).json();
+  } catch { /* se queda con los valores por defecto */ }
+  $("mode").textContent = MODES[info.mode] || info.mode;
+  $("mode").className = `mode ${info.mode}`;
+  $("filter-open").onclick = () => { showAll = false; $("filter-open").className = "on"; $("filter-all").className = ""; render(); };
+  $("filter-all").onclick = () => { showAll = true; $("filter-all").className = "on"; $("filter-open").className = ""; render(); };
+  // No se pinta nada hasta tener los eventos: una vista provisional que luego cambia mueve los botones
+  await poll();
+  if (!events.length) render();
+  setInterval(poll, 2000);
+  // Refresca la cuenta atrás de las aprobaciones aunque no lleguen eventos
+  setInterval(() => { if (buildIncidents().some((i) => i.status === "pending")) render(); }, 30000);
+}
+start();
+</script>
+</body>
+</html>

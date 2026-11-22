@@ -6,29 +6,40 @@ consulta a OPA y, si la acción está autorizada, la aplica. No contiene LLM: ca
 es una operación fija, y nunca ejecuta texto generado por el modelo.
 Diseño: docs/arquitectura.md
 """
+import hmac
 import json
 import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, urlparse
 
 OPA_URL = os.environ.get("AUTOKUB_OPA_URL", "http://127.0.0.1:8181/v1/data/autokub/remediation/decision")
 EVENTS_FILE = os.environ.get("AUTOKUB_EVENTS", ".local/events.jsonl")
 KUBECONFIG = os.environ.get("AUTOKUB_KUBECONFIG", ".local/executor.kubeconfig")
 CONFIG_FILE = os.environ.get("AUTOKUB_CONFIG", "config/lab.json")
 # propose: consulta a OPA y registra qué haría, sin modificar el clúster. Es el modo por defecto.
-MODES = ("propose", "execute")
+# approve: lo que OPA permite queda pendiente hasta que una persona lo aprueba (docs/adr/0009).
+MODES = ("propose", "approve", "execute")
+DEFAULT_APPROVAL_TIMEOUT = 900
+# Token que autoriza las decisiones sobre acciones pendientes. Solo lo tienen el ejecutor y el panel:
+# el agente puede hablar con el ejecutor, pero no puede aprobar sus propias propuestas.
+APPROVAL_TOKEN_FILE = os.environ.get("AUTOKUB_APPROVAL_TOKEN_FILE", "")
 # En el clúster escucha en la red del pod (0.0.0.0); una NetworkPolicy limita quién le llega
 ADDRESS = (os.environ.get("AUTOKUB_EXECUTOR_HOST", "127.0.0.1"), int(os.environ.get("AUTOKUB_EXECUTOR_PORT", "8090")))
 
 MAX_BODY_BYTES = 16384
 K8S_NAME = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
 INCIDENT_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+APPROVAL_ID = re.compile(r"^apr-[0-9a-f]{12}$")
+MAX_OUTCOMES = 1000
+MAX_PENDING = 100  # Acciones pendientes de aprobación a la vez
 MEMORY_UNITS = {"Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "k": 10**3, "M": 10**6, "G": 10**9}
 REVISION_ANNOTATION = "deployment.kubernetes.io/revision"
 # Historial de acciones del ejecutor sobre cada Deployment, para el límite de frecuencia.
@@ -48,6 +59,25 @@ def load_mode(path=CONFIG_FILE):
     if mode not in MODES:
         raise ValueError(f"modo no válido: {mode!r}")
     return mode
+
+
+def load_approval_timeout(path=CONFIG_FILE):
+    with open(path, encoding="utf-8") as file:
+        timeout = json.load(file).get("approval", {}).get("timeout_seconds", DEFAULT_APPROVAL_TIMEOUT)
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+        raise ValueError("approval.timeout_seconds no válido")
+    return timeout
+
+
+def load_approval_token(path=APPROVAL_TOKEN_FILE):
+    """Sin token no se puede aprobar nada: las acciones pendientes acaban caducando (fail-closed)."""
+    if not path:
+        return None
+    with open(path, encoding="utf-8") as file:
+        token = file.read().strip()
+    if len(token) < 32:
+        raise ValueError("el token de aprobación es demasiado corto")
+    return token
 
 
 def kubeconfig_args(path=KUBECONFIG):
@@ -114,18 +144,34 @@ def validate(proposal):
 
 
 class Executor:
-    def __init__(self, kubectl=run_kubectl, opa=ask_opa, events_file=EVENTS_FILE, mode="propose"):
+    def __init__(
+        self,
+        kubectl=run_kubectl,
+        opa=ask_opa,
+        events_file=EVENTS_FILE,
+        mode="propose",
+        approval_timeout=DEFAULT_APPROVAL_TIMEOUT,
+        clock=time.monotonic,
+    ):
         if mode not in MODES:
             raise ValueError(f"modo no válido: {mode!r}")
         self.kubectl = kubectl
         self.opa = opa
         self.events_file = events_file
         self.mode = mode
+        self.approval_timeout = approval_timeout
+        self.clock = clock
+        # Acciones pendientes de aprobación, solo en memoria: si el ejecutor se reinicia, se pierden
+        # y no se ejecuta nada. approval_id -> {incident_id, action, created}
+        self.pending = {}
+        # Último estado de la acción de cada incidente en modo approve, para el detector
+        self.outcomes = {}
 
     def emit(self, incident_id, event, summary, **data):
         record = {
             "incident_id": incident_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            # Milisegundos: el panel ordena eventos de varios pods que ocurren en el mismo segundo
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "component": "executor",
             "event": event,
             "summary": str(summary)[:500],
@@ -278,11 +324,39 @@ class Executor:
             return 403, {"status": "denied", "incident_id": incident_id, "reasons": decision["deny_reasons"]}
         self.emit(incident_id, "action_allowed", action["type"], facts=facts, target=action["target"])
 
-        if self.mode != "execute":
+        if self.mode == "propose":
             # Modo propuesta: queda registrado qué se habría hecho y que OPA lo autorizaba
             self.emit(incident_id, "action_would_execute", action["type"], target=action["target"])
             return 200, {"status": "proposed", "incident_id": incident_id}
+        if self.mode == "approve":
+            self.expire_pending()
+            # Una sola pendiente por incidente: la nueva sustituye a la anterior, que ya no se puede aprobar
+            for old_id, item in list(self.pending.items()):
+                if item["incident_id"] == incident_id:
+                    del self.pending[old_id]
+                    self.emit(incident_id, "approval_superseded", "sustituida por una propuesta nueva", approval_id=old_id)
+            if len(self.pending) >= MAX_PENDING:
+                # Tope de memoria: más pendientes de las que una persona puede revisar es un fallo
+                self.emit(incident_id, "incident_escalated", "demasiadas acciones pendientes de aprobación")
+                return 503, {"status": "escalated", "incident_id": incident_id, "reasons": ["demasiadas acciones pendientes"]}
+            approval_id = f"apr-{uuid.uuid4().hex[:12]}"
+            self.pending[approval_id] = {"incident_id": incident_id, "action": action, "created": self.clock()}
+            self.outcomes[incident_id] = "pending_approval"
+            while len(self.outcomes) > MAX_OUTCOMES:  # Los más antiguos primero
+                self.outcomes.pop(next(iter(self.outcomes)))
+            self.emit(
+                incident_id,
+                "action_pending_approval",
+                action["type"],
+                approval_id=approval_id,
+                expires_in_seconds=self.approval_timeout,
+                **action,
+            )
+            return 202, {"status": "pending_approval", "incident_id": incident_id, "approval_id": approval_id}
+        return self.execute(incident_id, action, facts)
 
+    def execute(self, incident_id, action, facts):
+        """Aplica una acción que OPA acaba de autorizar."""
         try:
             # Se registra antes de actuar: si el historial no se puede guardar, no se actúa.
             # Si la acción falla después, la marca se queda: cuenta como intento (conservador).
@@ -311,8 +385,53 @@ class Executor:
         self.emit(incident_id, "action_executed", action["type"], target=action["target"])
         return 200, {"status": "executed", "incident_id": incident_id}
 
+    def expire_pending(self):
+        now = self.clock()
+        for approval_id, item in list(self.pending.items()):
+            if now - item["created"] >= self.approval_timeout:
+                del self.pending[approval_id]
+                self.outcomes[item["incident_id"]] = "expired"
+                self.emit(item["incident_id"], "approval_expired", "sin decisión a tiempo", approval_id=approval_id)
 
-def make_handler(executor):
+    def status(self, incident_id):
+        """Estado de la acción de un incidente en modo approve. unknown si el ejecutor no la conoce."""
+        self.expire_pending()
+        return self.outcomes.get(incident_id, "unknown")
+
+    def decide(self, approval_id, decision, by):
+        """Aprueba o rechaza una acción pendiente. Aprobar no se salta nada: OPA vuelve a decidir
+        con los hechos de ahora, porque el clúster puede haber cambiado desde la propuesta."""
+        if not (isinstance(approval_id, str) and APPROVAL_ID.match(approval_id)):
+            return 400, {"status": "rejected", "reasons": ["approval_id no válido"]}
+        if decision not in ("approve", "reject"):
+            return 400, {"status": "rejected", "reasons": ["decisión no válida"]}
+        by = by if isinstance(by, str) else ""
+        by = re.sub(r"[^\w .@-]", "", by)[:64] or "sin nombre"
+        self.expire_pending()
+        item = self.pending.pop(approval_id, None)
+        if item is None:
+            return 404, {"status": "unknown", "reasons": ["no hay ninguna acción pendiente con ese identificador"]}
+        incident_id, action = item["incident_id"], item["action"]
+
+        if decision == "reject":
+            self.outcomes[incident_id] = "rejected"
+            self.emit(incident_id, "action_rejected_by_human", f"rechazada por {by}", approval_id=approval_id, by=by)
+            return 200, {"status": "rejected", "incident_id": incident_id}
+
+        self.emit(incident_id, "action_approved", f"aprobada por {by}", approval_id=approval_id, by=by)
+        facts = self.collect_facts(action["namespace"], action["target"])
+        verdict = self.opa({"action": action, "facts": facts})
+        if verdict["allow"] is not True:
+            self.outcomes[incident_id] = "denied"
+            self.emit(incident_id, "action_denied", ", ".join(verdict["deny_reasons"]), **action)
+            return 403, {"status": "denied", "incident_id": incident_id, "reasons": verdict["deny_reasons"]}
+        self.emit(incident_id, "action_allowed", action["type"], facts=facts, target=action["target"])
+        code, body = self.execute(incident_id, action, facts)
+        self.outcomes[incident_id] = body["status"]
+        return code, body
+
+
+def make_handler(executor, approval_token=None):
     class Handler(BaseHTTPRequestHandler):
         def respond(self, code, body):
             payload = json.dumps(body, ensure_ascii=False).encode()
@@ -322,14 +441,55 @@ def make_handler(executor):
             self.end_headers()
             self.wfile.write(payload)
 
-        def do_POST(self):
-            length = int(self.headers.get("Content-Length") or 0)
-            if self.path != "/actions" or not 0 < length <= MAX_BODY_BYTES:
+        def read_json(self):
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            if not 0 < length <= MAX_BODY_BYTES:
+                return None
+            try:
+                return json.loads(self.rfile.read(length))
+            except ValueError:
+                return None
+
+        def authorized(self):
+            # El token puede ser una función que lo lee en cada petición: si el Secret cambia (un
+            # renderizado sin lookup, como el de GitOps, lo regenera), ejecutor y panel siguen coincidiendo.
+            try:
+                token = approval_token() if callable(approval_token) else approval_token
+            except (OSError, ValueError):
+                return False
+            if not token:
+                return False
+            header = self.headers.get("Authorization", "")
+            return hmac.compare_digest(header.encode(), f"Bearer {token}".encode())
+
+        def do_GET(self):
+            # El detector consulta en qué quedó la acción pendiente de un incidente. Solo lectura.
+            url = urlparse(self.path)
+            incident_id = parse_qs(url.query).get("incident_id", [""])[0]
+            if url.path != "/approvals/status" or not INCIDENT_ID.match(incident_id):
                 self.respond(400, {"status": "rejected", "reasons": ["petición no válida"]})
                 return
-            try:
-                proposal = json.loads(self.rfile.read(length))
-            except ValueError:
+            self.respond(200, {"status": executor.status(incident_id), "incident_id": incident_id})
+
+        def do_POST(self):
+            if self.path.startswith("/approvals/"):
+                if not self.authorized():
+                    self.respond(403, {"status": "rejected", "reasons": ["sin autorización para aprobar"]})
+                    return
+                body = self.read_json()
+                if not isinstance(body, dict):
+                    self.respond(400, {"status": "rejected", "reasons": ["petición no válida"]})
+                    return
+                self.respond(*executor.decide(self.path[len("/approvals/"):], body.get("decision"), body.get("by")))
+                return
+            if self.path != "/actions":
+                self.respond(400, {"status": "rejected", "reasons": ["petición no válida"]})
+                return
+            proposal = self.read_json()
+            if proposal is None:
                 self.respond(400, {"status": "rejected", "reasons": ["JSON no válido"]})
                 return
             self.respond(*executor.handle(proposal))
@@ -342,7 +502,9 @@ def make_handler(executor):
 
 def main():
     mode = load_mode()
-    server = HTTPServer(ADDRESS, make_handler(Executor(mode=mode)))
+    executor = Executor(mode=mode, approval_timeout=load_approval_timeout())
+    load_approval_token()  # Falla al arrancar si el token configurado no existe o es corto
+    server = HTTPServer(ADDRESS, make_handler(executor, load_approval_token))
     print(f"Ejecutor en http://{ADDRESS[0]}:{ADDRESS[1]}/actions (modo: {mode})", file=sys.stderr, flush=True)
     server.serve_forever()
 

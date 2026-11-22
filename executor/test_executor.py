@@ -374,5 +374,204 @@ class HelpersTest(unittest.TestCase):
         self.assertIsNone(validate({"action": {"type": "escalate"}}))
 
 
+
+class ApproveModeTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.events_file = os.path.join(self.tmp.name, "events.jsonl")
+        self.decisions = [ALLOW]
+        self.opa_inputs = []
+        self.now = 0
+        self.kubectl = FakeKubectl(cluster())
+
+        def opa(opa_input):
+            self.opa_inputs.append(opa_input)
+            return self.decisions.pop(0) if len(self.decisions) > 1 else self.decisions[0]
+
+        self.executor = Executor(
+            kubectl=self.kubectl, opa=opa, events_file=self.events_file, mode="approve",
+            approval_timeout=60, clock=lambda: self.now,
+        )
+
+    def events(self):
+        with open(self.events_file, encoding="utf-8") as events:
+            return [json.loads(line) for line in events]
+
+    def propose(self):
+        code, body = self.executor.handle({"incident_id": "inc-1", "action": UNDO})
+        self.assertEqual((code, body["status"]), (202, "pending_approval"))
+        return body["approval_id"]
+
+    def test_new_proposal_supersedes_the_previous_one_for_the_same_incident(self):
+        first = self.propose()
+        second = self.propose()
+        self.assertEqual(list(self.executor.pending), [second])
+        self.assertEqual(self.executor.decide(first, "approve", "ana")[0], 404)
+        superseded = [e for e in self.events() if e["event"] == "approval_superseded"]
+        self.assertEqual([e["data"]["approval_id"] for e in superseded], [first])
+        # Aprobar la vigente deja el estado en executed, no en expired por la sustituida
+        self.assertEqual(self.executor.decide(second, "approve", "ana")[0], 200)
+        self.now = 1000
+        self.assertEqual(self.executor.status("inc-1"), "executed")
+
+    def test_pending_approvals_are_capped(self):
+        from executor import MAX_PENDING
+
+        for n in range(MAX_PENDING):
+            code, _ = self.executor.handle({"incident_id": f"inc-{n}", "action": UNDO})
+            self.assertEqual(code, 202)
+        code, body = self.executor.handle({"incident_id": "inc-extra", "action": UNDO})
+        self.assertEqual((code, body["status"]), (503, "escalated"))
+        self.assertEqual(len(self.executor.pending), MAX_PENDING)
+        self.assertEqual(self.events()[-1]["event"], "incident_escalated")
+
+    def test_allowed_action_waits_without_writing(self):
+        approval_id = self.propose()
+        self.assertEqual(self.kubectl.writes, [])
+        self.assertEqual(self.executor.status("inc-1"), "pending_approval")
+        pending = self.events()[-1]
+        self.assertEqual(pending["event"], "action_pending_approval")
+        self.assertEqual(pending["data"]["approval_id"], approval_id)
+
+    def test_approval_asks_opa_again_and_executes(self):
+        approval_id = self.propose()
+        code, body = self.executor.decide(approval_id, "approve", "ana")
+        self.assertEqual((code, body["status"]), (200, "executed"))
+        self.assertEqual(len(self.opa_inputs), 2)
+        self.assertEqual(self.kubectl.actions(), [("rollout", "undo", "deployment/cart", "--to-revision=2")])
+        self.assertEqual(self.executor.status("inc-1"), "executed")
+        kinds = [e["event"] for e in self.events()]
+        self.assertEqual(kinds[-3:], ["action_approved", "action_allowed", "action_executed"])
+
+    def test_approval_cannot_override_a_denial_at_approval_time(self):
+        self.decisions = [ALLOW, {"allow": False, "deny_reasons": ["límite de frecuencia"]}]
+        approval_id = self.propose()
+        code, body = self.executor.decide(approval_id, "approve", "ana")
+        self.assertEqual((code, body["status"]), (403, "denied"))
+        self.assertEqual(self.kubectl.writes, [])
+        self.assertEqual(self.executor.status("inc-1"), "denied")
+
+    def test_denied_action_never_asks_for_approval(self):
+        self.decisions = [{"allow": False, "deny_reasons": ["target no permitido"]}]
+        code, _ = self.executor.handle({"incident_id": "inc-1", "action": UNDO})
+        self.assertEqual(code, 403)
+        self.assertEqual(self.executor.pending, {})
+
+    def test_rejection(self):
+        approval_id = self.propose()
+        code, body = self.executor.decide(approval_id, "reject", "ana")
+        self.assertEqual((code, body["status"]), (200, "rejected"))
+        self.assertEqual(self.kubectl.writes, [])
+        self.assertEqual(self.executor.status("inc-1"), "rejected")
+        self.assertEqual(self.executor.decide(approval_id, "approve", "ana")[0], 404)
+
+    def test_expired_action_cannot_be_approved(self):
+        approval_id = self.propose()
+        self.now += 60
+        self.assertEqual(self.executor.status("inc-1"), "expired")
+        self.assertEqual(self.executor.decide(approval_id, "approve", "ana")[0], 404)
+        self.assertEqual(self.kubectl.writes, [])
+        self.assertIn("approval_expired", [e["event"] for e in self.events()])
+
+    def test_invalid_decisions(self):
+        approval_id = self.propose()
+        self.assertEqual(self.executor.decide("../x", "approve", "ana")[0], 400)
+        self.assertEqual(self.executor.decide(approval_id, "yes", "ana")[0], 400)
+        self.assertEqual(self.executor.status("inc-1"), "pending_approval")
+
+    def test_approver_name_is_sanitized(self):
+        approval_id = self.propose()
+        self.executor.decide(approval_id, "reject", "<script>ana</script>\n" * 10)
+        self.assertNotIn("<", self.events()[-1]["data"]["by"])
+        self.assertLessEqual(len(self.events()[-1]["data"]["by"]), 64)
+
+    def test_unknown_incident(self):
+        self.assertEqual(self.executor.status("inc-x"), "unknown")
+
+
+class ApprovalHttpTest(unittest.TestCase):
+    """El agente puede llegar al ejecutor, pero sin el token no puede aprobar sus propuestas."""
+
+    def setUp(self):
+        import threading
+        from http.server import HTTPServer
+
+        from executor import make_handler
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.executor = Executor(
+            kubectl=FakeKubectl(cluster()), opa=lambda _: ALLOW,
+            events_file=os.path.join(tmp.name, "e.jsonl"), mode="approve",
+        )
+        self.token = "t" * 40
+        self.server = HTTPServer(("127.0.0.1", 0), make_handler(self.executor, self.token))
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.shutdown)
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        _, body = self.executor.handle({"incident_id": "inc-1", "action": UNDO})
+        self.approval_id = body["approval_id"]
+
+    def post(self, path, body, token=None):
+        import urllib.error
+        import urllib.request
+
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        request = urllib.request.Request(self.base + path, data=json.dumps(body).encode(), headers=headers)
+        try:
+            with urllib.request.urlopen(request) as response:
+                return response.status
+        except urllib.error.HTTPError as error:
+            return error.code
+
+    def test_without_token_is_forbidden(self):
+        for token in (None, "x" * 40):
+            self.assertEqual(self.post(f"/approvals/{self.approval_id}", {"decision": "approve"}, token), 403)
+        self.assertEqual(self.executor.status("inc-1"), "pending_approval")
+
+    def test_with_token(self):
+        self.assertEqual(self.post(f"/approvals/{self.approval_id}", {"decision": "approve"}, self.token), 200)
+        self.assertEqual(self.executor.status("inc-1"), "executed")
+
+    def test_status_is_readable(self):
+        import urllib.request
+
+        with urllib.request.urlopen(f"{self.base}/approvals/status?incident_id=inc-1") as response:
+            self.assertEqual(json.load(response)["status"], "pending_approval")
+
+    def test_token_is_read_on_each_request(self):
+        """Si el Secret se regenera, el ejecutor usa el token nuevo sin reiniciarse."""
+        from executor import make_handler
+
+        current = {"token": "a" * 40}
+        handler = make_handler(self.executor, lambda: current["token"])
+
+        def check(token):
+            return handler.authorized(type("H", (), {"headers": {"Authorization": f"Bearer {token}"}})())
+
+        self.assertTrue(check("a" * 40))
+        current["token"] = "b" * 40
+        self.assertFalse(check("a" * 40))
+        self.assertTrue(check("b" * 40))
+
+    def test_unreadable_token_denies(self):
+        from executor import make_handler
+
+        def broken():
+            raise OSError("no existe")
+
+        handler = make_handler(self.executor, broken)
+        self.assertFalse(handler.authorized(type("H", (), {"headers": {"Authorization": "Bearer x"}})()))
+
+    def test_no_configured_token_disables_approvals(self):
+        from executor import make_handler
+
+        handler = make_handler(self.executor, None)
+        self.assertFalse(handler.authorized(type("H", (), {"headers": {"Authorization": "Bearer "}})()))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -33,7 +33,7 @@ echo "Tienda lista en http://localhost:8080"
 step "3/5 Imágenes de autokub"
 make --no-print-directory images > .local/try-build.log 2>&1 || { tail -20 .local/try-build.log; exit 1; }
 k3d image import -c autokub "ghcr.io/marcosperezcantero/autokub-agent:$TAG" \
-  "ghcr.io/marcosperezcantero/autokub-executor:$TAG" >/dev/null
+  "ghcr.io/marcosperezcantero/autokub-executor:$TAG" "ghcr.io/marcosperezcantero/autokub-panel:$TAG" >/dev/null
 
 step "4/5 Modelo"
 kubectl --context "$CONTEXT" create namespace "$NAMESPACE" --dry-run=client -o yaml \
@@ -61,13 +61,16 @@ PY
 helm upgrade --install autokub charts/autokub --kube-context "$CONTEXT" -n "$NAMESPACE" -f "$VALUES" >/dev/null
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deploy/autokub-executor --timeout=180s >/dev/null
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deploy/autokub-agent --timeout=180s >/dev/null
+kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deploy/autokub-panel --timeout=180s >/dev/null
 
 cat <<MSG
 
 autokub está en marcha en modo propuesta: detecta y propone, pero no modifica nada.
 
+  make try-panel      abre el panel de operación en http://localhost:8091
   make try-incident   provoca un CrashLoopBackOff en product-catalog
   make try-events     muestra en directo qué detecta, qué propone y qué decide OPA
+  make try-approve    pasa a modo aprobación: aplica lo que apruebes en el panel
   make try-execute    pasa a modo ejecución: autokub aplica lo que OPA autoriza
   make try-reset      revierte el incidente y vuelve a modo propuesta
   make down           borra el clúster

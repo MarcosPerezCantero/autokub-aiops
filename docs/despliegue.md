@@ -1,8 +1,8 @@
 # Despliegue en un clúster real
 
-> **Estado: en construcción para la versión 0.1** ([ADR 0006](adr/0006-producto-instalable.md)). Hechos: configuración en un fichero, historial en el Deployment, modo propuesta y modelo intercambiable ([ADR 0007](adr/0007-interfaz-con-el-modelo.md)). También el chart de Helm y las imágenes, probados en k3d. Pendiente: publicar la release 0.1.
->
-> **Diseño objetivo de la versión 0.1** ([ADR 0006](adr/0006-producto-instalable.md)). Aún no está implementado. Hoy el sistema funciona como laboratorio: los componentes corren como procesos en una máquina local contra la tienda de demostración, tal como describe [arquitectura.md](arquitectura.md). Este documento define cómo se instala y funciona en cualquier clúster de Kubernetes, y guía los pasos de la versión 0.1.
+> **Estado:** publicado en la versión 0.1.0 ([ADR 0006](adr/0006-producto-instalable.md)). El panel de operación y el modo `approve` ([ADR 0009](adr/0009-panel-de-operacion.md)) llegan con la 0.2.0.
+
+Este documento describe cómo se instala y funciona autokub en cualquier clúster de Kubernetes. En el laboratorio, los mismos componentes corren como procesos locales contra la tienda de demostración, tal como describe [arquitectura.md](arquitectura.md).
 
 La arquitectura no cambia: un agente que solo lee y propone, un ejecutor determinista que es el único que escribe, OPA autorizando cada acción y verificación posterior. Lo que cambia es dónde corre cada pieza, de dónde saca su configuración y con qué permisos.
 
@@ -21,18 +21,27 @@ flowchart TB
         end
         CFG[/"ConfigMap autokub-config"/]
         SEC[/"Secret con la clave del modelo"/]
-        VIEW["Vista (opcional)"]
+        TOK[/"Secret con el token de aprobación"/]
+        subgraph PP["Pod panel · SA autokub-panel"]
+            PAN["Panel de operación<br/>escucha en 127.0.0.1"]
+        end
     end
+    OPER(["Persona<br/>kubectl port-forward"])
 
     subgraph APPNS["Namespaces de la aplicación (configurables)"]
         DEP["Deployments permitidos"]
     end
 
     API["API de Kubernetes"]
-    LLM["Proveedor del modelo<br/>vía LiteLLM"]
+    LLM["Proveedor del modelo<br/>Anthropic o compatible con OpenAI"]
 
     CFG --> DET & EXE & OPA
     SEC --> AG
+    TOK --> EXE & PAN
+    OPER --> PAN
+    PAN -->|lee logs de autokub| API
+    PAN -->|aprobación + token| EXE
+    PAN -->|pregunta| AG
     DET -->|lee| API
     AG -->|lee| API
     AG <--> LLM
@@ -47,7 +56,7 @@ flowchart TB
 | Detector + agente | Pod `autokub-agent` | ServiceAccount `autokub-reader` | Leer pods, logs, eventos, Deployments y ReplicaSets de los namespaces configurados. Nada más |
 | Ejecutor | Pod `autokub-executor` | ServiceAccount `autokub-executor` | Leer lo necesario para obtener los hechos y, solo en modo ejecución, aplicar acciones sobre los Deployments permitidos |
 | OPA | Sidecar del ejecutor | La del ejecutor, sin usarla | Evaluar la política. Solo escucha en `localhost`, así que nadie más que el ejecutor puede consultarlo |
-| Vista | Pod `autokub-viewer`, opcional | Sin permisos sobre la aplicación | Mostrar los eventos. Sin forma de actuar |
+| Panel | Pod `autokub-panel`, opcional (activado por defecto) | ServiceAccount `autokub-panel` | Leer los logs de los pods de autokub en su propio namespace. Reenviar al ejecutor decisiones sobre acciones pendientes y al agente preguntas de solo lectura. Ningún permiso sobre la aplicación |
 
 ### Por qué el agente y el ejecutor van en pods distintos
 
@@ -61,7 +70,15 @@ Toda la información que antes estaba fijada para la demo vive en un único fich
 
 ```yaml
 # autokub.yaml
-mode: propose            # propose (por defecto) | execute
+mode: propose            # propose (por defecto) | approve | execute
+
+approval:
+  timeoutSeconds: 900    # modo approve: tiempo para decidir antes de avisar a una persona
+
+panel:
+  enabled: true
+  chat: true             # chat de solo lectura con el agente (solo con el agente LLM)
+  host: 127.0.0.1        # 0.0.0.0 solo detrás de un proxy que autentique (y su nombre en allowedHosts)
 
 namespaces:
   tienda:
@@ -96,17 +113,19 @@ Así, RBAC y OPA siguen siendo dos barreras independientes, pero construidas des
 
 ## Modos de funcionamiento
 
-| | `propose` (por defecto) | `execute` |
-|---|---|---|
-| Detecta y diagnostica | Sí | Sí |
-| Propone una acción y consulta a OPA | Sí | Sí |
-| Aplica la acción | **No**: registra `action_would_execute` con la decisión de OPA | Sí, si OPA la permite |
-| Verificación y reintento | No aplica | Sí, como hoy |
-| Permiso `patch` sobre Deployments | **No se concede** | Solo sobre los `targets` |
+| | `propose` (por defecto) | `approve` | `execute` |
+|---|---|---|---|
+| Detecta y diagnostica | Sí | Sí | Sí |
+| Propone una acción y consulta a OPA | Sí | Sí | Sí |
+| Aplica la acción | **No**: registra `action_would_execute` con la decisión de OPA | Si una persona la aprueba en el panel y OPA la vuelve a permitir | Sí, si OPA la permite |
+| Verificación y reintento | No aplica | Sí, tras aprobar | Sí |
+| Permiso `patch` sobre Deployments | **No se concede** | Solo sobre los `targets` | Solo sobre los `targets` |
 
 El modo propuesta existe porque nadie debería dejar que un agente desconocido modifique su clúster el primer día. Primero se observa qué habría hecho y si OPA lo habría permitido; cuando esas propuestas son fiables, se pasa a `execute`.
 
-En modo propuesta el chart **no concede permisos de escritura**: aunque el ejecutor tuviera un fallo, no podría modificar nada. Pasar a `execute` es un cambio explícito de configuración (`helm upgrade --set mode=execute`) que añade el permiso `patch`.
+En modo propuesta el chart **no concede permisos de escritura**: aunque el ejecutor tuviera un fallo, no podría modificar nada. Pasar a `approve` o `execute` es un cambio explícito de configuración (`helm upgrade --set mode=approve`) que añade el permiso `patch`.
+
+`approve` es el paso intermedio: autokub actúa, pero cada acción la decide una persona en el panel. En modo aprobación, la acción que OPA permite queda pendiente en la memoria del ejecutor. Si caduca o el ejecutor se reinicia, no se aplica y se avisa a una persona.
 
 ## Instalación
 
@@ -121,8 +140,8 @@ kubectl -n autokub-system create secret generic autokub-llm --from-literal=api-k
 helm install autokub oci://ghcr.io/marcosperezcantero/charts/autokub \
   --namespace autokub-system -f autokub.yaml
 
-# 3. Ver qué propone
-kubectl -n autokub-system logs deploy/autokub-executor -f
+# 3. Abrir el panel de operación en http://localhost:8091
+kubectl -n autokub-system port-forward deploy/autokub-panel 8091
 
 # Desinstalar: elimina también todo el RBAC creado en los namespaces de la aplicación
 helm uninstall autokub -n autokub-system
@@ -144,6 +163,9 @@ Se mantienen todas las garantías de [arquitectura.md](arquitectura.md#frontera-
 | `enableServiceLinks: false` | Kubernetes no inyecta variables de los Services, que llegaron a pisar la configuración del ejecutor |
 | Una réplica de cada componente | Dos detectores propondrían dos veces la misma acción. El límite de frecuencia lo cortaría, pero es mejor no provocarlo |
 | Contenedores sin root, sistema de ficheros de solo lectura | Reduce lo que puede hacer un proceso comprometido |
+| Token de aprobación solo en el ejecutor y el panel | El agente puede llegar al ejecutor, pero no puede aprobar sus propias propuestas |
+| Panel solo en `127.0.0.1`, sin Service | Solo se llega con `kubectl port-forward`: quién puede operar lo decide el RBAC (`pods/portforward` en `autokub-system`). El panel rechaza otros orígenes y nombres de host ajenos |
+| Chat solo desde el panel | Una NetworkPolicy impide que otros pods consulten al modelo |
 
 ## Datos que salen del clúster
 
@@ -153,11 +175,11 @@ El agente envía al proveedor del modelo lo que lee para diagnosticar: estado de
 
 En el laboratorio, los tres procesos escriben en el mismo fichero de eventos. En el clúster no comparten disco, así que cada componente escribe sus eventos JSON, con el mismo formato y el mismo `incident_id`, en su salida estándar. Se consultan con `kubectl logs` y los recoge cualquier sistema de logs que tenga el clúster (Loki, Elasticsearch, CloudWatch…).
 
-`make try-events` los muestra en directo, una línea por paso. La vista web sigue siendo una herramienta del laboratorio y no se instala con el chart en la versión 0.1.
+`make try-events` los muestra en directo, una línea por paso, y el panel de operación los reconstruye leyendo los logs de los pods del agente y del ejecutor. Por eso el historial del panel alcanza lo que conserven esos logs: si un pod se reinicia, sus eventos anteriores desaparecen del panel, que marca esos incidentes como «historial incompleto». Para conservarlos, basta el sistema de logs del clúster.
 
 ## GitOps
 
-Si la aplicación se gestiona con Argo CD o Flux con autocorrección, un rollback hecho directamente en la API se revierte en cuanto la herramienta vuelve a sincronizar. En modo propuesta no hay conflicto, porque no se modifica nada. Para el modo ejecución en clústeres con GitOps, la forma de remediar (proponer un cambio en el repositorio, pausar la sincronización o actuar por la API) es la decisión pendiente del ADR 0003.
+Si la aplicación se gestiona con Argo CD o Flux con autocorrección, un rollback hecho directamente en la API se revierte en cuanto la herramienta vuelve a sincronizar. En modo propuesta no hay conflicto, porque no se modifica nada. Para `approve` y `execute` en clústeres con GitOps, el [ADR 0003](adr/0003-remediacion-con-gitops.md) decide una remediación mixta: rollback por la API y una PR al repositorio GitOps que una persona fusiona (con autocorrección, solo la PR). Está pendiente de implementar; mientras tanto, en esos clústeres conviene usar el modo propuesta o `approve`.
 
 ## Diferencias con el laboratorio
 
@@ -184,5 +206,4 @@ Escribir la anotación usa el mismo permiso `patch` que las acciones, así que n
 
 ## Decisiones abiertas
 
-- **La vista en el clúster.** Leer logs de pods es sencillo pero depende de su retención; alternativa: que la vista no se instale y los eventos se consulten en el sistema de logs del clúster.
-- **Remediación con GitOps**: ADR 0003.
+- **Remediación con GitOps**: decidida en el [ADR 0003](adr/0003-remediacion-con-gitops.md), pendiente de implementar.

@@ -7,8 +7,10 @@ En el sistema final, la detección la harán las alertas de Prometheus (ADR 0005
 import json
 import os
 import subprocess
+import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timezone
@@ -19,6 +21,8 @@ CONFIG_FILE = os.environ.get("AUTOKUB_CONFIG", "config/lab.json")
 EVENTS_FILE = os.environ.get("AUTOKUB_EVENTS", ".local/events.jsonl")
 KUBECONFIG = os.environ.get("AUTOKUB_READER_KUBECONFIG", ".local/reader.kubeconfig")
 EXECUTOR_URL = os.environ.get("AUTOKUB_EXECUTOR_URL", "http://127.0.0.1:8090/actions")
+# En modo approve, dónde consultar si una persona ha decidido sobre la acción pendiente
+STATUS_URL = EXECUTOR_URL.rsplit("/", 1)[0] + "/approvals/status"
 
 # Valores por defecto de la detección; la configuración (sección "detection") puede cambiarlos
 DETECTION = {
@@ -35,8 +39,9 @@ DETECTION = {
 REVISION_ANNOTATION = "deployment.kubernetes.io/revision"
 
 PENDING, VERIFYING, ESCALATED, PROPOSED = "pending", "verifying", "escalated", "proposed"
+AWAITING, REJECTED = "awaiting_approval", "rejected"
 # Estados en los que el incidente sigue abierto sin que se haga nada más hasta que el fallo desaparece
-WAITING = {ESCALATED: "escalado", PROPOSED: "propuesta registrada"}
+WAITING = {ESCALATED: "escalado", PROPOSED: "propuesta registrada", REJECTED: "acción rechazada por una persona"}
 
 
 def load_config(path=CONFIG_FILE):
@@ -72,6 +77,16 @@ def post_action(payload):
         return json.load(error)
     except (OSError, ValueError):
         return {"status": "unreachable"}
+
+
+def approval_status(incident_id):
+    """Estado de la acción pendiente de aprobación. unreachable si el ejecutor no responde."""
+    url = f"{STATUS_URL}?{urllib.parse.urlencode({'incident_id': incident_id})}"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            return json.load(response).get("status", "unknown")
+    except (OSError, ValueError):
+        return "unreachable"
 
 
 def find_incidents(pods, replica_sets, namespace, min_restarts=DETECTION["min_restarts"]):
@@ -144,31 +159,41 @@ def deployment_health(deployment, replica_sets, pods):
 
 class Watcher:
     def __init__(
-        self, propose=rules.propose, send=post_action, events_file=EVENTS_FILE, clock=time.monotonic, detection=None
+        self,
+        propose=rules.propose,
+        send=post_action,
+        events_file=EVENTS_FILE,
+        clock=time.monotonic,
+        detection=None,
+        status=approval_status,
     ):
         self.propose = propose
         self.send = send
+        self.status = status
         self.events_file = events_file
         self.clock = clock
         self.detection = {**DETECTION, **(detection or {})}
         # Incidentes abiertos, por namespace y Deployment
         self.active = {}
+        # El chat emite desde otro hilo
+        self.emit_lock = threading.Lock()
 
     def emit(self, incident_id, event, summary, component="detector", **data):
         record = {
             "incident_id": incident_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "component": component,
             "event": event,
             "summary": str(summary)[:2000],
             "data": data,
         }
         line = json.dumps(record, ensure_ascii=False)
-        if self.events_file:  # En el clúster no hay fichero compartido: basta la salida estándar
-            os.makedirs(os.path.dirname(self.events_file) or ".", exist_ok=True)
-            with open(self.events_file, "a", encoding="utf-8") as events:
-                events.write(line + "\n")
-        print(line, flush=True)
+        with self.emit_lock:
+            if self.events_file:  # En el clúster no hay fichero compartido: basta la salida estándar
+                os.makedirs(os.path.dirname(self.events_file) or ".", exist_ok=True)
+                with open(self.events_file, "a", encoding="utf-8") as events:
+                    events.write(line + "\n")
+            print(line, flush=True)
 
     def tick(self, pods, replica_sets, deployments, namespace):
         """Procesa una lectura de un namespace. Cada namespace se trata por separado."""
@@ -180,6 +205,8 @@ class Watcher:
                 continue
             if state["phase"] == VERIFYING and name in by_name:
                 self.verify(name, state, by_name[name], replica_sets, pods, incidents.get(name))
+            elif state["phase"] == AWAITING:
+                self.check_approval(name, state)
             elif state["phase"] in WAITING:
                 if name in incidents:
                     state["last_seen"] = self.clock()
@@ -216,9 +243,27 @@ class Watcher:
         elif status == "proposed":
             # Modo propuesta: no hay nada que verificar ni que reintentar
             state.update(phase=PROPOSED, last_seen=self.clock())
+        elif status == "pending_approval":
+            # Modo approve: la acción espera a una persona; check_approval sigue su estado
+            state.update(phase=AWAITING, action=action)
         else:
             reasons = ", ".join(result.get("reasons", [])) or "sin motivo"
             self.escalate(state, f"{incident['deployment']}: {status} ({reasons})")
+
+    def check_approval(self, name, state):
+        status = self.status(state["id"])
+        if status in ("pending_approval", "unreachable"):
+            return
+        if status == "executed":
+            state["attempts"].append({"action": state["action"]["type"], "target": state["action"].get("target")})
+            state.update(phase=VERIFYING, started=self.clock(), healthy_since=None, restarts=None)
+        elif status == "rejected":
+            state.update(phase=REJECTED, last_seen=self.clock())
+        elif status == "expired":
+            self.escalate(state, f"{name}: la acción propuesta no se aprobó a tiempo")
+        else:
+            # denied al volver a evaluarla, failed al aplicarla o unknown si el ejecutor se reinició
+            self.escalate(state, f"{name}: la acción aprobada no se aplicó ({status})")
 
     def escalate(self, state, summary):
         self.send({"incident_id": state["id"], "action": {"type": "escalate", "params": {"summary": summary}}})
@@ -259,6 +304,13 @@ def main():
 
         backend = llm_agent.backend_from_config(CONFIG_FILE)
         watcher.propose = lambda incident: llm_agent.propose(incident, emit=watcher.emit, backend=backend)
+        if os.environ.get("AUTOKUB_CHAT_PORT"):
+            import chat
+
+            # En el clúster escucha en la red del pod; una NetworkPolicy solo deja pasar al panel
+            address = (os.environ.get("AUTOKUB_CHAT_HOST", "127.0.0.1"), int(os.environ["AUTOKUB_CHAT_PORT"]))
+            chat.serve(address, namespaces, backend, watcher.emit)
+            print(f"Chat de solo lectura en {address[0]}:{address[1]}", flush=True)
     proposer = os.environ.get("AUTOKUB_PROPOSER", "rules")
     print(f"Detector en marcha (proponedor: {proposer}; namespaces: {', '.join(namespaces)})", flush=True)
     while True:

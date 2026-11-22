@@ -33,6 +33,9 @@ class RbacTest(unittest.TestCase):
                 }
                 self.assertEqual(verbs, {"get", "list"})
 
+    def test_approve_mode_has_the_same_permissions_as_execute(self):
+        self.assertEqual(manifests({**CONFIG, "mode": "approve"}), manifests(CONFIG))
+
     def test_unknown_mode_fails(self):
         with self.assertRaises(ValueError):
             manifests({**CONFIG, "mode": "Execute"})

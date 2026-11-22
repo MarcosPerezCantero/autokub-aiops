@@ -34,6 +34,13 @@ spec:
               value: {{ .Values.proposer | quote }}
             - name: AUTOKUB_EXECUTOR_URL
               value: http://autokub-executor.{{ .Release.Namespace }}.svc:8090/actions
+            {{- if include "autokub.chatEnabled" . }}
+            # Chat de solo lectura para el panel; una NetworkPolicy solo deja pasar al panel
+            - name: AUTOKUB_CHAT_HOST
+              value: 0.0.0.0
+            - name: AUTOKUB_CHAT_PORT
+              value: "8092"
+            {{- end }}
             # La clave solo llega a este pod, que no tiene permisos de escritura
             - name: {{ if eq .Values.model.provider "anthropic" }}ANTHROPIC_API_KEY{{ else }}AUTOKUB_LLM_API_KEY{{ end }}
               valueFrom:
@@ -41,6 +48,11 @@ spec:
                   name: {{ .Values.model.apiKeySecret | quote }}
                   key: {{ .Values.model.apiKeySecretKey | quote }}
                   optional: true
+          {{- if include "autokub.chatEnabled" . }}
+          ports:
+            - name: chat
+              containerPort: 8092
+          {{- end }}
           volumeMounts:
             - name: config
               mountPath: /config
@@ -51,3 +63,20 @@ spec:
         - name: config
           configMap:
             name: autokub-config
+{{- if include "autokub.chatEnabled" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: autokub-agent
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: agent
+  ports:
+    - name: chat
+      port: 8092
+      targetPort: chat
+{{- end }}

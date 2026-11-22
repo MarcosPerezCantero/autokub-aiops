@@ -12,7 +12,7 @@ FROM python:3.12-slim-bookworm
 COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
 COPY --from=deps /opt/venv /opt/venv
 WORKDIR /app
-COPY agent/watcher.py agent/rules.py agent/llm_agent.py agent/
+COPY agent/watcher.py agent/rules.py agent/llm_agent.py agent/chat.py agent/
 USER 65532:65532
 ENV PATH=/opt/venv/bin:$PATH PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     AUTOKUB_READER_KUBECONFIG="" AUTOKUB_EVENTS="" AUTOKUB_CONFIG=/config/config.json

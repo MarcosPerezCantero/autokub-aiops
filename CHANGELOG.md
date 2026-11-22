@@ -2,6 +2,34 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); versiones según [SemVer](https://semver.org/lang/es/).
 
+## [Sin publicar]
+
+## [0.2.0] - 2026-11-22
+
+### Añadido
+- **Panel de operación** ([ADR 0009](docs/adr/0009-panel-de-operacion.md)), instalado con el chart: incidentes abiertos y cerrados, recorrido por cada etapa, razonamiento del agente, hechos y decisiones de OPA y registro de eventos. Se abre con `kubectl port-forward` (`make try-panel`). Sustituye a la vista del flujo del laboratorio.
+- **Modo `approve`**: lo que OPA permite espera a que una persona lo apruebe o lo rechace en el panel. Al aprobarla, el ejecutor vuelve a leer los hechos y a consultar a OPA antes de actuar. Las pendientes caducan (15 min por defecto) y entonces se avisa a una persona. `make try-approve`.
+- **Chat de solo lectura con el agente** desde el panel: responde con las herramientas de lectura del diagnóstico, sin poder proponer ni ejecutar acciones. Preguntas y respuestas quedan registradas en el incidente.
+- Marcas de tiempo de los eventos con milisegundos.
+
+### Seguridad
+- Solo el ejecutor y el panel tienen el token de aprobación (Secret generado por el chart): el agente no puede aprobar sus propias propuestas.
+- El panel escucha solo en `127.0.0.1` dentro de su pod y no tiene Service: quién puede operar lo decide el RBAC de Kubernetes (`pods/portforward`). Rechaza peticiones de otros orígenes y nombres de host ajenos (*DNS rebinding*).
+- Aprobar exige dos clics: la página se redibuja con cada evento y un clic dirigido a otro elemento no debe poder aplicar una acción.
+- NetworkPolicies: el chat del agente solo acepta tráfico del panel; nadie llega al panel por la red.
+- El panel solo muestra para aprobar las acciones pendientes que leyó del pod del ejecutor. El origen lo asigna el panel al leer los logs, no el contenido del evento: un agente manipulado no puede imprimir una pendiente falsa para que se apruebe otra sin verla.
+- Una sola acción pendiente por incidente (la nueva sustituye a la anterior) y como máximo 100 a la vez; por encima, el incidente se escala.
+- Ejecutor y panel leen el token de aprobación en cada petición: si el Secret se regenera (por ejemplo, en un renderizado de GitOps, donde `lookup` no está disponible), siguen usando el mismo sin reiniciarse.
+
+### Cambiado
+- `approval.timeoutSeconds` se puede pasar con `--set` (Helm lo lee como entero y la validación lo rechazaba).
+- El panel acepta el origen `https://` cuando está detrás de un proxy con TLS.
+- Los objetivos `make try-*` usan `--reset-then-reuse-values`: con `--reuse-values`, Helm no añade los valores por defecto nuevos del chart y la actualización falla.
+
+### Probado
+- 213 tests automáticos: política (48), ejecutor (50), agente, detector y chat (76), panel (18), RBAC (9) y chart renderizado (12).
+- En k3d con el agente LLM: incidente real hasta la aprobación; el agente no puede aprobar desde su pod (403, sin token y sin acceso a Secrets); aprobación con nueva consulta a OPA, rollback y verificación en 2 min; rechazo sin cambios en el clúster; chat inaccesible desde otro namespace.
+
 ## [0.1.0] - 2026-11-09
 
 Primera versión instalable en cualquier clúster de Kubernetes ([ADR 0006](docs/adr/0006-producto-instalable.md)). Cubre un tipo de incidente: pods en `CrashLoopBackOff` por una revisión defectuosa de un Deployment.

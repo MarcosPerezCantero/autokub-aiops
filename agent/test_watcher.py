@@ -376,3 +376,73 @@ class LoadConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApproveModeTest(unittest.TestCase):
+    def setUp(self):
+        self.sent = []
+        self.now = 0
+        self.approval = "pending_approval"
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.events_file = os.path.join(tmp.name, "events.jsonl")
+        self.watcher = Watcher(
+            send=self.send, events_file=self.events_file, clock=lambda: self.now, status=lambda _: self.approval
+        )
+
+    def send(self, payload):
+        self.sent.append(payload)
+        if payload["action"]["type"] == "escalate":
+            return {"status": "escalated"}
+        return {"status": "pending_approval"}
+
+    def tick(self, pods=FAILING, deployments=BROKEN, times=1):
+        for _ in range(times):
+            self.now += 5
+            self.watcher.tick(pods, REPLICA_SETS, deployments, "otel-demo")
+
+    def events(self):
+        with open(self.events_file, encoding="utf-8") as events:
+            return [json.loads(line)["event"] for line in events]
+
+    def test_waits_for_a_decision_without_proposing_again(self):
+        self.tick(times=20)
+        self.assertEqual([p["action"]["type"] for p in self.sent], ["rollout_undo"])
+        self.assertNotIn("verification_failed", self.events())
+
+    def test_approved_action_is_verified(self):
+        self.tick()
+        self.approval = "executed"
+        self.tick(RECOVERED_PODS, RECOVERED, times=10)
+        self.assertEqual(self.events()[-2:], ["verification_passed", "incident_closed"])
+
+    def test_failed_verification_after_approval_proposes_again(self):
+        self.tick()
+        self.approval = "executed"
+        self.tick(times=module.DETECTION["verify_timeout_seconds"] // 5 + 1)
+        self.assertIn("verification_failed", self.events())
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(self.watcher.active[("otel-demo", "cart")]["attempts"][0]["action"], "rollout_undo")
+
+    def test_rejected_waits_until_failure_disappears(self):
+        self.tick()
+        self.approval = "rejected"
+        self.tick(times=10)
+        self.assertEqual(len(self.sent), 1)
+        self.tick([], [], times=module.DETECTION["clear_seconds"] // 5)
+        self.assertEqual(self.events()[-1], "incident_closed")
+
+    def test_expired_or_lost_approval_escalates(self):
+        for status in ("expired", "unknown", "denied", "failed"):
+            with self.subTest(status=status):
+                self.setUp()
+                self.tick()
+                self.approval = status
+                self.tick(times=3)
+                self.assertEqual([p["action"]["type"] for p in self.sent], ["rollout_undo", "escalate"])
+
+    def test_unreachable_executor_keeps_waiting(self):
+        self.tick()
+        self.approval = "unreachable"
+        self.tick(times=5)
+        self.assertEqual(len(self.sent), 1)

@@ -1,7 +1,8 @@
 {{- include "autokub.validate" . }}
 {{- $model := dict "provider" .Values.model.provider "name" .Values.model.name "effort" .Values.model.effort }}
 {{- if .Values.model.base_url }}{{- $_ := set $model "base_url" .Values.model.base_url }}{{ end }}
-{{- $config := dict "mode" .Values.mode "namespaces" .Values.namespaces "limits" .Values.limits "detection" .Values.detection "model" $model }}
+{{- $approval := dict "timeout_seconds" (int .Values.approval.timeoutSeconds) }}
+{{- $config := dict "mode" .Values.mode "namespaces" .Values.namespaces "limits" .Values.limits "detection" .Values.detection "model" $model "approval" $approval }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -1,0 +1,107 @@
+{{- if .Values.panel.enabled }}
+# Panel de operación: lee los eventos de los pods de autokub y reenvía aprobaciones y preguntas.
+# Sin permisos sobre la aplicación. Escucha en 127.0.0.1: se abre con kubectl port-forward.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: autokub-panel
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: autokub-panel
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+rules:
+  # kubectl logs deployment/... resuelve el Deployment y lee los logs de su pod
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+    resourceNames: ["autokub-agent", "autokub-executor"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: autokub-panel
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: autokub-panel
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: autokub-panel
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: autokub-panel
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autokub.labels" . | nindent 4 }}
+    app.kubernetes.io/component: panel
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: panel
+  template:
+    metadata:
+      labels: {{- include "autokub.labels" . | nindent 8 }}
+        app.kubernetes.io/component: panel
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmaps.yaml") . | sha256sum }}
+    spec:
+      enableServiceLinks: false
+      serviceAccountName: autokub-panel
+      {{- include "autokub.podSecurity" . | nindent 6 }}
+      containers:
+        - name: panel
+          image: {{ include "autokub.image" (dict "root" . "name" "panel") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: AUTOKUB_PANEL_HOST
+              value: {{ .Values.panel.host | quote }}
+            - name: AUTOKUB_PANEL_ALLOWED_HOSTS
+              value: {{ join "," .Values.panel.allowedHosts | quote }}
+            - name: AUTOKUB_PANEL_NAMESPACE
+              value: {{ .Release.Namespace }}
+            - name: AUTOKUB_EXECUTOR_BASE
+              value: http://autokub-executor.{{ .Release.Namespace }}.svc:8090
+            - name: AUTOKUB_CHAT_URL
+              value: {{ if include "autokub.chatEnabled" . }}http://autokub-agent.{{ .Release.Namespace }}.svc:8092/chat{{ else }}""{{ end }}
+            - name: AUTOKUB_APPROVAL_TOKEN_FILE
+              value: /approval/token
+          ports:
+            - name: http
+              containerPort: 8091
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: approval
+              mountPath: /approval
+              readOnly: true
+          resources: {{- toYaml .Values.resources.panel | nindent 12 }}
+          {{- include "autokub.containerSecurity" . | nindent 10 }}
+      volumes:
+        - name: config
+          configMap:
+            name: autokub-config
+        - name: approval
+          secret:
+            secretName: autokub-approval
+            defaultMode: 0440
+{{- end }}

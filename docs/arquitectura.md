@@ -12,14 +12,14 @@ flowchart TB
         subgraph OBS["Observabilidad"]
             OTEL["OpenTelemetry Collector"]
             PROM["Prometheus + Alertmanager"]
-            LOKI["Loki"]
+            LOGS["OpenSearch (logs)"]
             JAEGER["Jaeger"]
         end
     end
 
     subgraph AGENTE["Plano de decisión (no fiable)"]
         LG["Agente LangGraph<br/>diagnostica y propone"]
-        LLM["LLM vía LiteLLM"]
+        LLM["LLM: API de Anthropic<br/>o compatible con OpenAI"]
     end
 
     subgraph CONTROL["Plano de control (determinista)"]
@@ -29,10 +29,10 @@ flowchart TB
     end
 
     APP -->|telemetría OTLP| OTEL
-    OTEL --> PROM & LOKI & JAEGER
-    PROM -->|alerta| LG
+    OTEL --> PROM & LOGS & JAEGER
+    PROM -.->|alerta| LG
     LG <--> LLM
-    LG -->|solo lectura| OBS
+    LG -.->|solo lectura| OBS
     LG -->|solo lectura| API
     LG -->|propuesta de acción| EXE
     EXE -->|¿autorizada?| OPA
@@ -40,6 +40,8 @@ flowchart TB
     EXE --> LOG
     API --> APP
 ```
+
+Las líneas discontinuas son conexiones previstas que aún no existen: hoy el detector lee el estado de los pods en la API de Kubernetes, y el agente solo consulta esa API (estado, eventos, logs y revisiones). La detección por alertas y la lectura de métricas, logs y trazas llegan con el resto del catálogo.
 
 La separación clave es entre dos planos:
 
@@ -95,6 +97,7 @@ La verificación es de solo lectura, por lo que la hace el detector. Un desplieg
 | Denegación por defecto | Si OPA no responde o no hay regla, la acción no se ejecuta (*fail-closed*) |
 | Límite de frecuencia | Corta los bucles de remediación. El historial vive en el Deployment y sobrevive a reinicios del ejecutor |
 | Registro de auditoría | Cada propuesta y decisión queda registrada, también las bloqueadas |
+| Aprobación sin atajos | En modo `approve` solo se aprueba lo que OPA ya permitió, y al aprobarlo OPA vuelve a decidir con los hechos de ese momento. El agente no tiene el token de aprobación |
 
 RBAC y OPA son capas complementarias: RBAC no distingue, por ejemplo, un cambio de memoria razonable de uno excesivo; OPA sí. Y si la política tuviera un error, RBAC sigue acotando el daño posible.
 
@@ -148,18 +151,44 @@ Cada componente emite un evento por cada paso del incidente, con un formato com�
 }
 ```
 
-Los eventos son `incident_detected`, `agent_thinking`, `agent_text`, `agent_tool_call`, `agent_tool_result`, `agent_diagnosis`, `agent_failed`, `action_proposed`, `action_rejected`, `action_allowed`, `action_denied`, `action_executed`, `action_would_execute` (modo propuesta), `action_failed`, `history_rewrite_failed`, `verification_passed`, `verification_failed`, `incident_escalated` e `incident_closed`. El `incident_id` permite reconstruir el recorrido completo de cada incidente.
+Los eventos son `incident_detected`, `agent_thinking`, `agent_text`, `agent_tool_call`, `agent_tool_result`, `agent_diagnosis`, `agent_failed`, `action_proposed`, `action_rejected`, `action_allowed`, `action_denied`, `action_executed`, `action_would_execute` (modo propuesta), `action_pending_approval`, `action_approved`, `action_rejected_by_human` y `approval_expired` (modo aprobación), `action_failed`, `history_rewrite_failed`, `verification_passed`, `verification_failed`, `incident_escalated` e `incident_closed`. El chat añade `chat_question`, `chat_tool_call`, `chat_answer` y `chat_failed`. El `incident_id` permite reconstruir el recorrido completo de cada incidente. Las marcas de tiempo llevan milisegundos para ordenar eventos de varios pods.
 
 Sobre estos eventos se apoyan dos usos:
 
 - **Auditoría y evaluación:** de ellos salen los tiempos y las acciones bloqueadas.
-- **Vista del flujo:** una página web que muestra en directo por qué paso va cada incidente, dónde se ha detenido y qué ha leído y razonado el agente. El razonamiento es el resumen que devuelve la API, no el proceso interno en bruto.
+- **Panel de operación** ([ADR 0009](adr/0009-panel-de-operacion.md)): una página web que muestra en directo los incidentes, por qué paso va cada uno, qué ha leído y razonado el agente y qué hechos evaluó OPA. El razonamiento es el resumen que devuelve la API, no el proceso interno en bruto.
 
-Langfuse complementa esta vista con el detalle interno del agente: prompts, respuestas, herramientas y coste. La vista propia cubre lo que Langfuse no ve: el recorrido por OPA, el ejecutor y Kubernetes.
+Langfuse complementa el panel con el detalle interno del agente: prompts, respuestas, herramientas y coste. El panel cubre lo que Langfuse no ve: el recorrido por OPA, el ejecutor y Kubernetes.
 
-La vista es de **solo lectura**: no tiene ninguna forma de actuar sobre el clúster, para no abrir un camino alternativo al ejecutor, y el sistema funciona igual sin ella.
+El panel **no tiene permisos sobre la aplicación** y el sistema funciona igual sin él, salvo el modo `approve`, que lo necesita para decidir. Solo puede hacer dos cosas, y ninguna abre un camino alternativo al ejecutor:
 
-Los eventos pueden contener texto que procede de logs, por lo que la vista debe tratarlo como contenido no fiable y mostrarlo escapado.
+- **Aprobar o rechazar** una acción pendiente. Envía al ejecutor el identificador y la decisión, nunca una acción, con un token que el agente no tiene. El ejecutor vuelve a leer los hechos y a consultar a OPA antes de actuar: una persona no puede saltarse la política desde el panel.
+- **Preguntar al agente.** El chat usa las herramientas de lectura del diagnóstico, sin `propose_action`: aunque una pregunta o un log lo manipulen, no tiene forma de actuar.
+
+```mermaid
+sequenceDiagram
+    participant P as Persona (panel)
+    participant E as Ejecutor
+    participant O as OPA
+    participant K as Kubernetes
+    participant D as Detector
+
+    E->>E: OPA permite la propuesta: queda pendiente
+    D->>E: ¿Estado de la acción? (cada vuelta)
+    P->>E: Aprobar apr-… + token
+    E->>K: Vuelve a leer los hechos
+    E->>O: Acción + hechos actuales
+    alt Permitida
+        E->>K: Ejecuta la acción
+        D->>E: ¿Estado? → executed
+        D->>K: Verifica la recuperación
+    else Denegada ahora
+        E-->>P: Bloqueada
+        D->>D: Escala
+    end
+```
+
+Los eventos pueden contener texto que procede de logs, por lo que el panel lo trata como contenido no fiable y lo muestra escapado, con una política de contenido que impide cargar nada externo.
 
 ## Prompt injection indirecta
 

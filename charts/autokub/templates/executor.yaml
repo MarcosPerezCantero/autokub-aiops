@@ -32,12 +32,18 @@ spec:
           env:
             - name: AUTOKUB_EXECUTOR_PORT
               value: "8090"
+            # Solo el ejecutor y el panel tienen el token: el agente no puede aprobar sus propuestas
+            - name: AUTOKUB_APPROVAL_TOKEN_FILE
+              value: /approval/token
           ports:
             - name: http
               containerPort: 8090
           volumeMounts:
             - name: config
               mountPath: /config
+              readOnly: true
+            - name: approval
+              mountPath: /approval
               readOnly: true
           resources: {{- toYaml .Values.resources.executor | nindent 12 }}
           {{- include "autokub.containerSecurity" . | nindent 10 }}
@@ -66,6 +72,10 @@ spec:
         - name: policy
           configMap:
             name: autokub-policy
+        - name: approval
+          secret:
+            secretName: autokub-approval
+            defaultMode: 0440
 ---
 apiVersion: v1
 kind: Service

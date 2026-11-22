@@ -10,7 +10,7 @@ DEMO_VALUES := deploy/otel-demo/values.yaml
 # Python 3.12 para el venv del agente (en macOS: make venv PYTHON=python3.12)
 PYTHON ?= python3
 
-.PHONY: up stop down status demo demo-down alerts-test try try-check try-incident try-events try-execute try-reset test lint chart-test chart-sync images policies-test venv agent-test auth prototype prototype-llm
+.PHONY: up stop down status demo demo-down alerts-test try try-check try-incident try-events try-panel try-approve try-execute try-reset test lint chart-test chart-sync images policies-test venv agent-test auth prototype prototype-llm
 
 up: ## Crea el clúster (idempotente)
 	@if k3d cluster list $(CLUSTER) >/dev/null 2>&1; then \
@@ -50,7 +50,7 @@ test: policies-test agent-test chart-test alerts-test ## Todos los tests (sin cl
 lint: ## Formato y errores de Rego y Python, y configuración del laboratorio
 	opa check --strict policies
 	opa fmt --fail --list policies
-	ruff check agent executor viewer infra charts demo observability
+	ruff check agent executor panel infra charts demo observability
 	python3 infra/rbac.py config/lab.json > /dev/null
 	helm lint --quiet charts/autokub --set 'namespaces.ns.targets={a}'
 	@# La política del chart debe ser la del repositorio
@@ -70,10 +70,10 @@ venv: ## Crea el entorno de Python del agente con versiones fijadas
 	$(PYTHON) -m venv .venv
 	.venv/bin/pip install --quiet --require-virtualenv -r agent/requirements.lock
 
-agent-test: ## Ejecuta los tests del ejecutor, del agente, de la vista y del RBAC
+agent-test: ## Ejecuta los tests del ejecutor, del agente, del panel y del RBAC
 	cd executor && python3 -m unittest
 	cd agent && ../.venv/bin/python -m unittest
-	cd viewer && python3 -m unittest
+	cd panel && python3 -m unittest
 	cd infra && python3 -m unittest
 
 alerts-test: ## Comprueba las alertas y ejecuta sus tests unitarios
@@ -86,9 +86,10 @@ chart-test: ## Renderiza el chart y lo compara con el RBAC y la política del la
 chart-sync: ## Copia la política al chart
 	cp policies/remediation.rego charts/autokub/files/remediation.rego
 
-images: ## Construye las imágenes del agente y del ejecutor
+images: ## Construye las imágenes del agente, del ejecutor y del panel
 	docker build -f images/executor/Dockerfile -t ghcr.io/marcosperezcantero/autokub-executor:dev .
 	docker build -f images/agent/Dockerfile -t ghcr.io/marcosperezcantero/autokub-agent:dev .
+	docker build -f images/panel/Dockerfile -t ghcr.io/marcosperezcantero/autokub-panel:dev .
 
 try: ## Prueba autokub en un clúster local en un solo comando
 	./demo/try.sh
@@ -106,12 +107,18 @@ try-events: try-check ## Eventos de autokub en directo (Ctrl+C para salir)
 	kubectl -n autokub-system logs -f --prefix --max-log-requests=4 -l app.kubernetes.io/name=autokub --all-containers \
 		| python3 demo/events.py
 
+try-panel: try-check ## Abre el panel de operación en http://localhost:8091 (Ctrl+C para cerrar)
+	kubectl -n autokub-system port-forward deploy/autokub-panel 8091
+
+try-approve: try-check ## Pasa autokub a modo aprobación: aplica lo que apruebes en el panel
+	helm upgrade autokub charts/autokub --kube-context $(TRY_CONTEXT) -n autokub-system --reset-then-reuse-values --set mode=approve
+
 try-execute: try-check ## Pasa autokub a modo ejecución
-	helm upgrade autokub charts/autokub --kube-context $(TRY_CONTEXT) -n autokub-system --reuse-values --set mode=execute
+	helm upgrade autokub charts/autokub --kube-context $(TRY_CONTEXT) -n autokub-system --reset-then-reuse-values --set mode=execute
 
 try-reset: try-check ## Revierte el incidente y vuelve a modo propuesta
 	./scenarios/crashloop/revert.sh || true
-	helm upgrade autokub charts/autokub --kube-context $(TRY_CONTEXT) -n autokub-system --reuse-values --set mode=propose
+	helm upgrade autokub charts/autokub --kube-context $(TRY_CONTEXT) -n autokub-system --reset-then-reuse-values --set mode=propose
 
 auth: ## Aplica el RBAC generado desde config/lab.json y crea los kubeconfig temporales (24 h)
 	./infra/service-accounts.sh
