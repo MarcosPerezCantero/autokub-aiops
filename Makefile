@@ -10,7 +10,7 @@ DEMO_VALUES := deploy/otel-demo/values.yaml
 # Python 3.12 para el venv del agente (en macOS: make venv PYTHON=python3.12)
 PYTHON ?= python3
 
-.PHONY: up stop down status demo demo-down alerts-test try try-check try-incident try-events try-panel try-approve try-execute try-reset test lint chart-test chart-sync images policies-test venv agent-test auth prototype prototype-llm
+.PHONY: up stop down status demo demo-down alerts-test try try-check try-incident try-events try-panel try-approve try-execute try-reset try-security test lint chart-test chart-sync images policies-test venv agent-test auth prototype prototype-llm
 
 up: ## Crea el clúster (idempotente)
 	@if k3d cluster list $(CLUSTER) >/dev/null 2>&1; then \
@@ -115,6 +115,10 @@ try-approve: try-check ## Pasa autokub a modo aprobación: aplica lo que apruebe
 
 try-execute: try-check ## Pasa autokub a modo ejecución
 	helm upgrade autokub charts/autokub --kube-context $(TRY_CONTEXT) -n autokub-system --reset-then-reuse-values --set mode=execute
+
+try-security: try-check ## Envía propuestas maliciosas al ejecutor y comprueba que ninguna llega al clúster
+	@mkdir -p .local/security
+	python3 scenarios/security/battery.py --context $(TRY_CONTEXT) --out .local/security/battery-$$(date +%Y%m%d-%H%M%S).json
 
 try-reset: try-check ## Revierte el incidente y vuelve a modo propuesta
 	./scenarios/crashloop/revert.sh || true

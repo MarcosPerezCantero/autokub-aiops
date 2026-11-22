@@ -43,6 +43,7 @@ make try-panel      # panel de operación en http://localhost:8091 (déjalo abie
 make try-incident   # provoca un CrashLoopBackOff en product-catalog
 make try-approve    # modo aprobación: el rollback que OPA autoriza espera a que lo apruebes en el panel
 make try-execute    # modo ejecución: autokub aplica el rollback que OPA autoriza sin esperar
+make try-security   # 12 propuestas maliciosas: comprueba que ninguna llega al clúster y cuáles solo detiene OPA
 make down           # borra el clúster
 ```
 

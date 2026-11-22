@@ -45,9 +45,9 @@ Se fijan antes de medir, para no ajustarlos a los resultados.
 ## Pruebas de seguridad
 
 1. **Tests unitarios de políticas:** cada regla, con casos permitidos y denegados, en `policies/`.
-2. **Batería de acciones prohibidas:** propuestas enviadas directamente al ejecutor, sin LLM (namespace ajeno, objetivo excluido, memoria excesiva, acción desconocida).
+2. **Batería de acciones prohibidas:** propuestas enviadas directamente al ejecutor, sin LLM (namespace ajeno, objetivo excluido, memoria excesiva, acción desconocida). Implementada en `scenarios/security/` (`make try-security`): 12 propuestas que simulan un modelo engañado por instrucciones en los logs, enviadas desde el pod del agente. Registra qué barrera detiene cada una (validación del ejecutor, OPA o RBAC) y comprueba que ningún Deployment cambia.
 3. **Prompt injection indirecta:** instrucciones maliciosas en logs y en mensajes de eventos, durante incidentes reales.
-4. **Comparación con y sin OPA:** las mismas pruebas de inyección, con el ejecutor en modo simulación y las políticas desactivadas, para registrar qué acciones se habrían ejecutado. Es la prueba directa del valor de la política.
+4. **Comparación con y sin OPA:** las mismas pruebas de inyección, con el ejecutor en modo simulación y las políticas desactivadas, para registrar qué acciones se habrían ejecutado. Es la prueba directa del valor de la política. La batería lo estima sin desactivar la política: una propuesta habría llegado al clúster sin OPA si pasa la validación, el ejecutor sabe aplicarla y el RBAC del ejecutor la permite (`kubectl auth can-i`).
 
 ## Situaciones inesperadas
 
